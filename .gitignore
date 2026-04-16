@@ -1,0 +1,36 @@
+# Build and install outputs
+/build/
+/install/
+/bin/
+
+# Logs, runtime output, and collected data
+/log/
+/Log/
+/source/allfile/
+
+# Model weights and generated binary/data artifacts
+/source/pt/*.onnx
+!/source/pt/classes.txt
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dll
+*.dylib
+*.exe
+*.out
+*.pyc
+__pycache__/
+
+# Non-code notes and documentation excluded from repository uploads
+/attention/
+/docs/
+/limit/
+
+# Local editor and environment files
+/.vscode/
+/.idea/
+.env
+*.swp
+*~
