@@ -1,0 +1,1672 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>无人车控制台</title>
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: rgba(13, 22, 40, 0.94);
+      --panel-2: rgba(18, 31, 54, 0.92);
+      --panel-3: rgba(10, 17, 31, 0.96);
+      --line: rgba(255,255,255,.07);
+      --text: #edf3ff;
+      --muted: #8d9dc3;
+      --primary: #4da3ff;
+      --primary-2: #6dd8ff;
+      --success: #29c58b;
+      --warning: #f5b23b;
+      --danger: #ef5b5b;
+      --radius: 18px;
+      --shadow: 0 14px 40px rgba(0,0,0,.26);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      min-height: 100%;
+      font-family: "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(77,163,255,.10), transparent 26%),
+        radial-gradient(circle at top right, rgba(109,216,255,.06), transparent 22%),
+        linear-gradient(180deg, #06101d 0%, #081425 100%);
+    }
+
+    body { min-height: 100vh; }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 224px 1fr;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 18px 14px;
+      background: rgba(6, 12, 24, 0.96);
+      border-right: 1px solid rgba(255,255,255,.05);
+      backdrop-filter: blur(10px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .logo {
+      width: 42px;
+      height: 42px;
+      border-radius: 13px;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      color: #04101d;
+      background: linear-gradient(135deg, var(--primary), var(--primary-2));
+      box-shadow: 0 10px 24px rgba(77,163,255,.30);
+      flex: 0 0 auto;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 17px;
+      line-height: 1.2;
+    }
+
+    .brand p {
+      margin: 4px 0 0;
+      font-size: 12px;
+      line-height: 1.3;
+      color: var(--muted);
+    }
+
+    .nav {
+      display: grid;
+      gap: 9px;
+    }
+
+    .nav button {
+      width: 100%;
+      text-align: left;
+      padding: 11px 13px;
+      border-radius: 13px;
+      background: rgba(255,255,255,.03);
+      border: 1px solid transparent;
+      color: var(--text);
+      font-size: 14px;
+      cursor: pointer;
+      transition: .18s ease;
+    }
+
+    .nav button:hover,
+    .nav button.active {
+      background: rgba(77,163,255,.14);
+      border-color: rgba(77,163,255,.30);
+      box-shadow: inset 0 0 0 1px rgba(77,163,255,.08);
+    }
+
+    .tip {
+      margin-top: 18px;
+      padding: 14px;
+      border-radius: 15px;
+      background: linear-gradient(180deg, rgba(77,163,255,.15), rgba(77,163,255,.06));
+      border: 1px solid rgba(77,163,255,.20);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    .tip strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .main {
+      padding: 20px;
+    }
+
+    .main-inner {
+      max-width: 1480px;
+      margin: 0 auto;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+
+    .page-title h2 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.15;
+    }
+
+    .page-title p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    button,
+    .chip,
+    .tiny-chip,
+    .badge,
+    .tag {
+      border: 0;
+      font-family: inherit;
+    }
+
+    .btn-primary,
+    .btn-success,
+    .btn-danger,
+    .btn-ghost,
+    .chip {
+      border-radius: 12px;
+      padding: 10px 15px;
+      font-size: 13px;
+    }
+
+    .btn-primary,
+    .btn-success,
+    .btn-danger,
+    .btn-ghost {
+      cursor: pointer;
+      font-weight: 600;
+      transition: transform .16s ease;
+    }
+
+    .btn-primary:hover,
+    .btn-success:hover,
+    .btn-danger:hover,
+    .btn-ghost:hover { transform: translateY(-1px); }
+
+    .btn-primary { background: linear-gradient(135deg, var(--primary), #60bbff); color: white; }
+    .btn-success { background: linear-gradient(135deg, var(--success), #54ddb0); color: #072418; }
+    .btn-danger { background: linear-gradient(135deg, var(--danger), #ff8080); color: white; }
+    .btn-ghost {
+      background: rgba(255,255,255,.05);
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,.06);
+    }
+
+    .chip {
+      background: rgba(255,255,255,.05);
+      color: var(--muted);
+      border: 1px solid rgba(255,255,255,.06);
+    }
+
+    .tiny-chip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.05);
+      color: var(--muted);
+      border: 1px solid rgba(255,255,255,.06);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .tiny-chip.success {
+      background: rgba(41,197,139,.12);
+      border-color: rgba(41,197,139,.20);
+      color: #78ecc0;
+    }
+
+    .grid { display: grid; gap: 16px; }
+
+    .summary {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-bottom: 16px;
+    }
+
+    .page {
+      display: none;
+      gap: 16px;
+      align-items: start;
+    }
+
+    .page.active { display: grid; }
+    .page-two-col { grid-template-columns: minmax(0, .92fr) minmax(0, 1.18fr); }
+    .page-single { grid-template-columns: 1fr; }
+
+    .overview-top {
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr);
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    .overview-bottom {
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr);
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    .mode-head-left {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .overview-left {
+      height: 100%;
+      grid-template-rows: 1fr 1fr;
+    }
+
+    .overview-left > .card,
+    .overview-top > .card,
+    .overview-bottom > .card {
+      height: 100%;
+    }
+
+    .stack { display: grid; gap: 16px; }
+
+    .card {
+      background: linear-gradient(180deg, rgba(12, 20, 36, 0.95), rgba(10, 17, 32, 0.96));
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 1px;
+      background: linear-gradient(90deg, rgba(77,163,255,.16), rgba(109,216,255,.04), transparent);
+    }
+
+    .card-body {
+      padding: 16px;
+      position: relative;
+    }
+
+    .metric {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .metric h3 {
+      margin: 0;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 8px;
+      font-size: 30px;
+      line-height: 1;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+      background: rgba(41,197,139,.14);
+      border: 1px solid rgba(41,197,139,.22);
+      color: #7ff0c7;
+    }
+
+    .badge.warn {
+      background: rgba(245,178,59,.14);
+      border-color: rgba(245,178,59,.22);
+      color: #ffd884;
+    }
+
+    .section-head,
+    .panel-title,
+    .block-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .section-head h3,
+    .panel-title h3,
+    .block-title h4 { margin: 0; }
+    .section-head h3,
+    .panel-title h3 { font-size: 18px; }
+    .block-title h4 { font-size: 15px; }
+
+    .section-head p,
+    .panel-title span,
+    .muted,
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin: 0;
+    }
+
+    .mode-toggle {
+      display: inline-flex;
+      gap: 4px;
+      padding: 4px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.05);
+      border: 1px solid rgba(255,255,255,.06);
+      flex-wrap: wrap;
+    }
+
+    .mode-toggle button {
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .mode-toggle button.active {
+      background: linear-gradient(135deg, var(--primary), #5ab5ff);
+      color: white;
+    }
+
+    .mode-panel {
+      display: none;
+      gap: 12px;
+    }
+
+    .mode-panel.active {
+      display: grid;
+    }
+
+    .mini-map {
+      height: 220px;
+      border-radius: 15px;
+      overflow: hidden;
+      position: relative;
+      background:
+        linear-gradient(rgba(255,255,255,.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px),
+        radial-gradient(circle at 28% 35%, rgba(77,163,255,.16), transparent 28%),
+        linear-gradient(180deg, #13213b, #0c1526);
+      background-size: 20px 20px, 20px 20px, auto, auto;
+      border: 1px solid rgba(255,255,255,.05);
+    }
+
+    .route svg { width: 100%; height: 100%; }
+
+    .car {
+      position: absolute;
+      left: 52%;
+      top: 51%;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 0 8px rgba(41,197,139,.12), 0 0 24px rgba(41,197,139,.54);
+    }
+
+    .device-grid,
+    .control-grid,
+    .observation-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .subcard {
+      background: linear-gradient(180deg, rgba(20,31,51,.82), rgba(16,27,45,.86));
+      border: 1px solid rgba(255,255,255,.05);
+      border-radius: 15px;
+      padding: 14px;
+    }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .mini-card,
+    .control-item {
+      padding: 12px;
+      border-radius: 13px;
+      background: rgba(255,255,255,.03);
+      border: 1px solid rgba(255,255,255,.05);
+    }
+
+    .mini-card .name,
+    .control-item .label {
+      margin-bottom: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .mini-card strong,
+    .control-item strong {
+      display: block;
+      font-size: 26px;
+      line-height: 1;
+    }
+
+    .bars,
+    .list,
+    .control-panel,
+    .slider-group,
+    .device-list,
+    .key-list,
+    .action-row {
+      display: grid;
+      gap: 10px;
+    }
+
+    .action-row {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 11px 12px;
+      border-radius: 12px;
+      background: rgba(255,255,255,.03);
+      border: 1px solid rgba(255,255,255,.05);
+      font-size: 13px;
+    }
+
+    .placeholder-frame {
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 16px;
+      line-height: 1.65;
+      border-radius: 15px;
+      border: 1px dashed rgba(255,255,255,.10);
+      background: linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,.01));
+      color: var(--muted);
+      font-size: 13px;
+      min-height: 260px;
+    }
+
+    .photo-preview-shell {
+      min-height: 260px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      border-radius: 15px;
+      border: 1px dashed rgba(255,255,255,.10);
+      background: linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,.01));
+    }
+
+    .photo-preview {
+      display: block;
+      width: 100%;
+      max-height: 420px;
+      object-fit: contain;
+      background: #040915;
+    }
+
+    .empty-photo {
+      padding: 16px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+      text-align: center;
+    }
+
+    .photo-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
+    .yolo-table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 14px;
+      background: rgba(255,255,255,.025);
+      border: 1px solid rgba(255,255,255,.05);
+      font-size: 12px;
+    }
+
+    .yolo-table th,
+    .yolo-table td {
+      padding: 10px 9px;
+      text-align: left;
+      border-bottom: 1px solid rgba(255,255,255,.05);
+    }
+
+    .yolo-table th {
+      background: rgba(255,255,255,.03);
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .yolo-table tr:last-child td { border-bottom: 0; }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(143,124,255,.14);
+      border: 1px solid rgba(143,124,255,.22);
+      color: #cabfff;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .manual-box {
+      display: grid;
+      gap: 12px;
+      padding: 14px;
+      border-radius: 15px;
+      background: linear-gradient(180deg, rgba(21,34,56,.86), rgba(17,28,46,.92));
+      border: 1px solid rgba(255,255,255,.05);
+    }
+
+    .manual-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .manual-head strong {
+      font-size: 15px;
+      line-height: 1.3;
+    }
+
+    .manual-buttons {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .manual-buttons button {
+      width: 100%;
+      padding: 10px 12px;
+      font-size: 12px;
+    }
+
+    .slider-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .slider-value {
+      font-size: 14px;
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      margin: 0;
+      cursor: pointer;
+      accent-color: var(--primary);
+    }
+
+    .range-note {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .logs pre {
+      margin: 0;
+      padding: 13px;
+      border-radius: 14px;
+      background: rgba(7,13,25,.96);
+      border: 1px solid rgba(255,255,255,.05);
+      color: #a9b7da;
+      font-size: 12px;
+      line-height: 1.7;
+      overflow-y: auto;
+      overflow-x: hidden;
+      min-height: 220px;
+      max-height: 360px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overscroll-behavior: contain;
+    }
+
+    .footer-note {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    @media (max-width: 1220px) {
+      .summary,
+      .page-two-col,
+      .overview-top,
+      .overview-bottom,
+      .device-grid,
+      .control-grid,
+      .observation-grid,
+      .action-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 860px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { position: relative; height: auto; }
+      .summary,
+      .mini-grid,
+      .manual-buttons { grid-template-columns: 1fr; }
+      .main { padding: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">UGV</div>
+        <div>
+          <h1>无人车控制台</h1>
+          <p>project / Phytium Pi / ROS 2</p>
+        </div>
+      </div>
+
+      <div class="nav" id="side-nav">
+        <button class="active" data-page-target="page-overview">总览面板</button>
+              </div>
+
+      <div class="tip">
+        <strong>当前页面整理</strong>
+        设备状态与设备信息继续绑定停止模式；识别显示位于控制接口下方，关键显示位于其右侧。
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="topbar">
+          <div class="page-title">
+            <h2>整车系统实时监控</h2>
+            <p id="page-sub-title">当前页面：总览面板</p>
+          </div>
+          <div class="actions">
+            <div class="chip" id="chip-serial">串口通信：未启动</div>
+            <button class="btn-success" type="button" id="system-start-btn">开始任务</button>
+            <button class="btn-ghost" type="button" id="system-restart-btn">系统重启</button>
+            <button class="btn-danger" type="button" id="system-emergency-stop-btn">紧急停止</button>
+          </div>
+        </div>
+
+        <section class="grid summary">
+          <div class="card"><div class="card-body metric"><div><h3>系统状态</h3><strong id="system-state">已停止</strong></div><span class="badge warn" id="system-badge">OFFLINE</span></div></div>
+          <div class="card"><div class="card-body metric"><div><h3>当前模式</h3><strong id="mode-text">停止</strong></div><span class="badge" id="mode-badge">STOP</span></div></div>
+          <div class="card"><div class="card-body metric"><div><h3>避障观测</h3><strong id="avoidance-state">等待观测</strong></div><span class="badge warn">DEPTH + LIDAR</span></div></div>
+          <div class="card"><div class="card-body metric"><div><h3>识别显示链</h3><strong id="recognition-count">0 个目标</strong></div><span class="badge">RGB + YOLO</span></div></div>
+        </section>
+
+        <section class="page page-single active" id="page-overview">
+          <div class="stack">
+            <div class="overview-top">
+              <div class="card">
+                <div class="card-body">
+                  <div class="mode-head-left">
+                    <div class="mode-toggle" id="mode-toggle">
+                      <button type="button" data-mode="stop" class="active">停止</button>
+                      <button type="button" data-mode="auto">自动</button>
+                      <button type="button" data-mode="avoidance">避障</button>
+                      <button type="button" data-mode="manual">手动</button>
+                    </div>
+                    <div>
+                      <h3 style="margin:0; font-size:18px;">控制接口</h3>
+                      <p class="muted">模式控制位于左侧，识别显示放在控制接口下方</p>
+                    </div>
+                  </div>
+
+                  <div class="control-panel">
+                    <div class="mode-panel active" id="stop-mode-panel">
+                      <div class="subcard">
+                        <div class="block-title"><h4>设备状态与设备信息</h4><span class="tiny-chip">STOP 绑定</span></div>
+                        <div class="device-grid">
+                          <div class="row"><span class="label">GPS</span><strong id="gps-state">未启动</strong></div>
+                          <div class="row"><span class="label">IMU</span><strong id="imu-state">未启动</strong></div>
+                          <div class="row"><span class="label">雷达</span><strong id="lidar-module-state">未启动</strong></div>
+                          <div class="row"><span class="label">深度相机</span><strong id="depth-module-state">未启动</strong></div>
+                          <div class="row"><span class="label">RGB + YOLO</span><strong id="rgb-module-state">未启动</strong></div>
+                          <div class="row"><span class="label">底盘通信</span><strong id="stm32-state">未启动</strong></div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="mode-panel" id="auto-mode-panel">
+                      <div class="subcard">
+                        <div class="block-title"><h4>自动模式控制</h4><span class="tiny-chip success">AUTO</span></div>
+                        <p class="muted" style="margin:0;">自动工作区预留，当前不绑定任何控制指令。</p>
+                      </div>
+                    </div>
+
+                    <div class="mode-panel" id="avoidance-mode-panel">
+                      <div class="subcard">
+                        <div class="block-title"><h4>避障模式控制</h4><span class="tiny-chip success">AVOIDANCE</span></div>
+                        <p class="muted" style="margin:0;">避障工作区预留，当前不绑定任何控制指令。</p>
+                      </div>
+                    </div>
+
+                    <div class="mode-panel" id="manual-mode-panel">
+                      <div class="manual-box">
+                        <div class="manual-head">
+                          <div>
+                            <div class="label">手动模式控制</div>
+                            <strong id="manual-command-status">当前未发送手动指令</strong>
+                          </div>
+                          <span class="tiny-chip">C1 / C2 / C3</span>
+                        </div>
+
+                        <div>
+                          <div class="label" style="margin-bottom:8px;">模式按钮（#C3）</div>
+                          <div class="manual-buttons">
+                            <button class="btn-danger" type="button" data-manual-cmd="stop">停止</button>
+                            <button class="btn-success" type="button" data-manual-cmd="start">启动</button>
+                            <button class="btn-ghost" type="button" data-manual-cmd="restart">重启</button>
+                            <button class="btn-primary" type="button" data-manual-cmd="turnback">正反转</button>
+                          </div>
+                        </div>
+
+                        <div class="slider-group">
+                          <div class="slider-head"><span>速度滑条（sendSpeed / #C1，cm/s）</span><span class="slider-value" id="speed-value">27</span></div>
+                          <input id="speed-slider" type="range" min="0" max="100" step="1" value="27" />
+                          <div class="range-note">发送示例：<code>#C1=<span id="speed-frame">27</span>!</code></div>
+                        </div>
+
+                        <div class="slider-group">
+                          <div class="slider-head"><span>转角滑条（sendAngle / #C2，相对 230）</span><span class="slider-value" id="angle-value">0</span></div>
+                          <input id="angle-slider" type="range" min="-230" max="230" step="1" value="0" />
+                          <div class="range-note">发送示例：<code>#C2=<span id="angle-frame">0</span>!</code></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-body logs">
+                  <div class="panel-title">
+                    <h3>系统日志</h3>
+                    <span>位于控制接口右侧</span>
+                  </div>
+                  <pre id="log-box">正在连接日志流...</pre>
+                </div>
+              </div>
+            </div>
+
+            <div class="overview-bottom">
+              <div class="card">
+                <div class="card-body">
+                  <div class="section-head">
+                    <div>
+                      <h3>识别显示</h3>
+                      <p>位于控制接口下方，保留当前识别结果展示方式</p>
+                    </div>
+                    <span class="tiny-chip">bbox / class / confidence</span>
+                  </div>
+                  <div class="photo-preview-shell">
+                    <img id="rgb-yolo-photo-preview" class="photo-preview" alt="最近识别抓拍" hidden />
+                    <div id="rgb-yolo-photo-empty" class="empty-photo">等待识别抓拍...</div>
+                  </div>
+                  <div class="photo-meta">
+                    <div class="footer-note" id="rgb-yolo-photo-path">照片目录等待更新...</div>
+                    <a id="rgb-yolo-photo-link" class="tiny-chip" href="#" target="_blank" rel="noopener" hidden>查看原图</a>
+                  </div>
+                  <table class="yolo-table" style="margin-top:14px;">
+                    <thead>
+                      <tr><th>类别</th><th>置信度</th><th>框中心</th><th>框尺寸</th></tr>
+                    </thead>
+                    <tbody id="yolo-table-body-recognition">
+                      <tr><td colspan="4">等待识别结果...</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-body">
+                  <div class="panel-title">
+                    <h3>关键显示</h3>
+                    <span>位于识别显示右侧</span>
+                  </div>
+                  <div class="key-list">
+                    <div class="row"><span class="label">纬度</span><strong id="lat-text">--</strong></div>
+                    <div class="row"><span class="label">经度</span><strong id="lon-text">--</strong></div>
+                    <div class="row"><span class="label">姿态角</span><strong id="attitude-text">--</strong></div>
+                    <div class="row"><span class="label">深度相机最近障碍</span><strong id="depth-nearest-obstacle">--</strong></div>
+                    <div class="row"><span class="label">雷达最小距离</span><strong id="lidar-nearest-obstacle">--</strong></div>
+                    <div class="row"><span class="label">最近空间障碍物</span><strong id="nearest-obstacle">--</strong></div>
+                    <div class="row"><span class="label">车辆真实速度</span><strong id="vehicle-speed-text">--</strong></div>
+                    <div class="row"><span class="label">车辆角度值</span><strong id="vehicle-angle-text">--</strong></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const defaultDeviceTexts = {
+      gps: '未启动',
+      imu: '未启动',
+      lidar: '未启动',
+      depth_camera: '未启动',
+      rgb_yolo: '未启动',
+      stm32: '未启动'
+    };
+
+    const pageTitles = {
+      'page-overview': '当前页面：总览面板'
+    };
+
+	    const modeLabels = {
+	      STOP: { text: '停止', badge: 'STOP' },
+	      AUTO: { text: '自动', badge: 'AUTO' },
+	      AVOIDANCE: { text: '避障', badge: 'AVOID' },
+	      MANUAL: { text: '手动', badge: 'MANUAL' }
+	    };
+
+	    const logState = {
+	      entries: [],
+	      latestSequence: 0,
+	      autoFollow: true
+	    };
+
+	    const workspaceState = {
+	      activeMode: 'STOP',
+	      switching: false
+	    };
+
+	    const stm32DisplayConfig = {
+	      turnLimitEncoder: 230
+	    };
+
+	    const recognitionState = {
+	      photoUrl: '',
+	      metadataUrl: '',
+	      metadata: null,
+	      metadataTrusted: false,
+	      requestId: 0
+	    };
+
+	    function setText(id, value) {
+	      const element = document.getElementById(id);
+	      if (element) {
+	        element.textContent = value;
+	      }
+	    }
+
+	    function deviceText(device, fallback = '未启动') {
+	      return device && typeof device.text === 'string' && device.text
+	        ? device.text
+	        : fallback;
+	    }
+
+	    function initDashboardDefaults() {
+	      workspaceState.activeMode = 'STOP';
+	      workspaceState.switching = false;
+	      renderSystemStatus(false);
+	      setSystemMode('STOP');
+	      setText('chip-serial', '串口通信：未启动');
+	      setText('gps-state', defaultDeviceTexts.gps);
+	      setText('imu-state', defaultDeviceTexts.imu);
+	      setText('lidar-module-state', defaultDeviceTexts.lidar);
+	      setText('depth-module-state', defaultDeviceTexts.depth_camera);
+	      setText('rgb-module-state', defaultDeviceTexts.rgb_yolo);
+	      setText('stm32-state', defaultDeviceTexts.stm32);
+	      setText('avoidance-state', '等待观测');
+	      setText('depth-nearest-bound', '--');
+	      setText('depth-ratio-bound', '--');
+	      setText('lidar-front-bound', '--');
+	      setText('lidar-points-bound', '--');
+	      setText('lat-text', '--');
+	      setText('lon-text', '--');
+	      setText('attitude-text', '--');
+	      setText('depth-nearest-obstacle', '--');
+	      setText('lidar-nearest-obstacle', '--');
+	      setText('nearest-obstacle', '--');
+	      setText('vehicle-speed-text', '--');
+	      setText('vehicle-angle-text', '--');
+	      setText('recognition-count', '0 个目标');
+	    }
+
+	    function finiteNumber(value) {
+	      const number = Number(value);
+	      return Number.isFinite(number) ? number : null;
+	    }
+
+	    function fixedText(value, digits, suffix = '') {
+	      const number = finiteNumber(value);
+	      return number === null ? '--' : `${number.toFixed(digits)}${suffix}`;
+	    }
+
+	    function integerText(value) {
+	      const number = finiteNumber(value);
+	      return number === null ? '--' : `${Math.round(number)}`;
+	    }
+
+	    function vehicleAngleText(angleValue) {
+	      const angle = finiteNumber(angleValue);
+	      if (angle === null) {
+	        return '--';
+	      }
+	      const encoderTarget = stm32DisplayConfig.turnLimitEncoder + angle;
+	      return `C2 ${integerText(angle)} / 编码器目标 ${integerText(encoderTarget)}`;
+	    }
+
+	    function renderKeyDisplay(keyDisplay) {
+	      const gps = keyDisplay && keyDisplay.gps ? keyDisplay.gps : {};
+	      const imu = keyDisplay && keyDisplay.imu ? keyDisplay.imu : {};
+	      const depth = keyDisplay && keyDisplay.depth ? keyDisplay.depth : {};
+	      const lidar = keyDisplay && keyDisplay.lidar ? keyDisplay.lidar : {};
+	      const nearest = keyDisplay && keyDisplay.nearest_obstacle ? keyDisplay.nearest_obstacle : {};
+	      const vehicle = keyDisplay && keyDisplay.vehicle ? keyDisplay.vehicle : {};
+
+	      setText('lat-text', gps.valid ? fixedText(gps.latitude, 7) : '--');
+	      setText('lon-text', gps.valid ? fixedText(gps.longitude, 7) : '--');
+	      setText('attitude-text', imu.valid
+	        ? `R ${fixedText(imu.roll_deg, 1, '°')} / P ${fixedText(imu.pitch_deg, 1, '°')} / Y ${fixedText(imu.yaw_deg, 1, '°')}`
+	        : '--');
+	      const depthNearest = finiteNumber(depth.nearest_m);
+	      const depthZone = typeof depth.nearest_zone === 'string' ? depth.nearest_zone : '';
+	      setText('depth-nearest-obstacle', depth.valid && depthNearest !== null
+	        ? `${depthZone ? `${depthZone} ` : ''}${depthNearest.toFixed(2)} m`
+	        : (depth && Number(depth.valid_pixels || 0) === 0 ? '无有效深度' : '--'));
+	      const lidarNearest = finiteNumber(lidar.nearest_m);
+	      const lidarAngle = finiteNumber(lidar.nearest_angle_deg);
+	      setText('lidar-nearest-obstacle', lidar.valid && lidarNearest !== null
+	        ? `${lidarNearest.toFixed(2)} m${lidarAngle === null ? '' : ` / ${lidarAngle.toFixed(1)}°`}`
+	        : '--');
+
+	      const nearestAngle = finiteNumber(nearest.angle_deg);
+	      const nearestDistance = finiteNumber(nearest.distance_m);
+	      const nearestZone = typeof nearest.zone === 'string' ? nearest.zone : '';
+	      setText('nearest-obstacle', nearest.valid && nearestDistance !== null
+	        ? `${nearest.source || '空间'} ${nearestZone ? `${nearestZone} ` : ''}${nearestDistance.toFixed(2)} m${nearestAngle === null ? '' : ` / ${nearestAngle.toFixed(1)}°`}`
+	        : '--');
+	      setText('avoidance-state', nearest.valid && nearestDistance !== null
+	        ? `最近 ${nearestDistance.toFixed(2)} m`
+	        : '等待观测');
+	      setText('vehicle-speed-text', vehicle.speed_valid ? `${vehicle.speed} cm/s` : '--');
+	      setText('vehicle-angle-text', vehicle.angle_valid ? vehicleAngleText(vehicle.angle) : '--');
+	    }
+
+	    function renderRuntimeState(state) {
+	      const system = state && state.system ? state.system : {};
+	      const devices = state && state.devices ? state.devices : {};
+	      renderSystemStatus(Boolean(system.running));
+	      setSystemMode(system.mode || 'STOP');
+	      setText('gps-state', deviceText(devices.gps, defaultDeviceTexts.gps));
+	      setText('imu-state', deviceText(devices.imu, defaultDeviceTexts.imu));
+	      setText('lidar-module-state', deviceText(devices.lidar, defaultDeviceTexts.lidar));
+	      setText('depth-module-state', deviceText(devices.depth_camera, defaultDeviceTexts.depth_camera));
+	      setText('rgb-module-state', deviceText(devices.rgb_yolo, defaultDeviceTexts.rgb_yolo));
+	      setText('stm32-state', deviceText(devices.stm32, defaultDeviceTexts.stm32));
+	      setText('chip-serial', `串口通信：${deviceText(devices.stm32, defaultDeviceTexts.stm32)}`);
+	      renderKeyDisplay(state && state.key_display ? state.key_display : null);
+	    }
+
+	    function renderSystemStatus(running) {
+	      const systemState = document.getElementById('system-state');
+	      const systemBadge = document.getElementById('system-badge');
+	      if (!systemState || !systemBadge) return;
+
+	      if (running) {
+	        systemState.textContent = '运行中';
+	        systemBadge.textContent = 'ONLINE';
+	        systemBadge.classList.remove('warn');
+	      } else {
+	        systemState.textContent = '已停止';
+	        systemBadge.textContent = 'OFFLINE';
+	        systemBadge.classList.add('warn');
+	      }
+	    }
+
+	    function formatLogEntry(entry) {
+	      const timestamp = entry.timestamp || '--';
+	      const level = entry.level || 'INFO';
+	      const module = entry.module || 'SYSTEM';
+	      const message = entry.message || '';
+	      return `[${timestamp}] [${level}] [${module}] ${message}`;
+	    }
+
+	    function renderLogEntries(entries) {
+	      const logBox = document.getElementById('log-box');
+	      if (!logBox) return;
+	      const nearBottom =
+	        (logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight) < 24;
+	      const shouldFollow = logState.autoFollow || nearBottom || !entries.length;
+
+	      if (!entries.length) {
+	        logBox.textContent = '日志流已连接，等待新日志...';
+	        if (shouldFollow) {
+	          logBox.scrollTop = logBox.scrollHeight;
+	        }
+	        return;
+	      }
+
+	      logBox.textContent = entries.map(formatLogEntry).join('\n');
+	      if (shouldFollow) {
+	        logBox.scrollTop = logBox.scrollHeight;
+	      }
+	    }
+
+	    function replaceLogEntries(entries) {
+	      logState.entries = Array.isArray(entries) ? entries.slice(-200) : [];
+	      logState.latestSequence = logState.entries.length
+	        ? Number(logState.entries[logState.entries.length - 1].sequence || 0)
+	        : 0;
+	      renderLogEntries(logState.entries);
+	    }
+
+	    function appendLogEntries(entries) {
+	      if (!Array.isArray(entries) || !entries.length) return;
+
+	      for (const entry of entries) {
+	        const sequence = Number(entry.sequence || 0);
+	        if (sequence <= logState.latestSequence) continue;
+	        logState.entries.push(entry);
+	        logState.latestSequence = sequence;
+	      }
+
+	      if (logState.entries.length > 200) {
+	        logState.entries = logState.entries.slice(-200);
+	      }
+
+	      renderLogEntries(logState.entries);
+	    }
+
+	    function initLogStream() {
+	      const logBox = document.getElementById('log-box');
+	      if (!logBox) return;
+
+	      if (typeof EventSource === 'undefined') {
+	        logBox.textContent = '当前浏览器不支持 EventSource，无法订阅日志流。';
+	        return;
+	      }
+
+	      logBox.textContent = '正在连接日志流...';
+	      logBox.addEventListener('scroll', () => {
+	        logState.autoFollow =
+	          (logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight) < 24;
+	      });
+	      const source = new EventSource('/api/logs/stream');
+
+	      source.addEventListener('snapshot', event => {
+	        try {
+	          replaceLogEntries(JSON.parse(event.data));
+	        } catch (error) {
+	          logBox.textContent = `日志快照解析失败: ${error.message}`;
+	        }
+	      });
+
+	      source.addEventListener('entries', event => {
+	        try {
+	          appendLogEntries(JSON.parse(event.data));
+	        } catch (error) {
+	          appendLogEntries([{
+	            sequence: logState.latestSequence + 1,
+	            timestamp: new Date().toLocaleString(),
+	            level: 'ERROR',
+	            module: 'WEB',
+	            message: `日志增量解析失败: ${error.message}`
+	          }]);
+	        }
+	      });
+
+	      source.addEventListener('keepalive', () => {});
+	      source.onerror = () => {
+	        if (!logState.entries.length) {
+	          logBox.textContent = '日志流连接中断，等待自动重连...';
+	        }
+	      };
+	    }
+
+	    function parseJsonPayload(text) {
+	      if (!text || typeof text !== 'string') return null;
+	      try {
+	        return JSON.parse(text);
+	      } catch (error) {
+	        appendLogEntries([{
+	          sequence: logState.latestSequence + 1,
+	          timestamp: new Date().toLocaleString(),
+	          level: 'WARN',
+	          module: 'WEB',
+	          message: `rgb_yolo_payload 解析失败: ${error.message}`
+	        }]);
+	        return null;
+	      }
+	    }
+
+	    function renderDetections(targetId, detections, emptyText = '暂无识别结果') {
+	      const tbody = document.getElementById(targetId);
+	      if (!tbody) return;
+
+	      if (!Array.isArray(detections) || !detections.length) {
+	        tbody.innerHTML = `<tr><td colspan="4">${emptyText}</td></tr>`;
+	        return;
+	      }
+
+	      tbody.innerHTML = detections.map(item => `
+	        <tr>
+	          <td><span class="tag">${item.cls}</span></td>
+	          <td>${Number.isFinite(item.conf) ? item.conf.toFixed(2) : '--'}</td>
+	          <td>${item.center || '--'}</td>
+	          <td>${item.size || '--'}</td>
+	        </tr>
+	      `).join('');
+	    }
+
+	    function buildDetectionRows(yolo) {
+	      if (!yolo) return [];
+
+	      if (Array.isArray(yolo.detections) && yolo.detections.length) {
+	        return yolo.detections.map(item => ({
+	          cls: item.class_name || item.cls || 'unknown',
+	          conf: Number(item.confidence ?? item.conf),
+	          center: item.center || (
+	            Number.isFinite(Number(item.bbox_x)) &&
+	            Number.isFinite(Number(item.bbox_y)) &&
+	            Number.isFinite(Number(item.bbox_w)) &&
+	            Number.isFinite(Number(item.bbox_h))
+	          )
+	            ? `(${Math.round(Number(item.bbox_x) + Number(item.bbox_w) / 2)}, ${Math.round(Number(item.bbox_y) + Number(item.bbox_h) / 2)})`
+	            : '(--, --)',
+	          size: item.size || (
+	            Number.isFinite(Number(item.bbox_w)) && Number.isFinite(Number(item.bbox_h))
+	              ? `${Number(item.bbox_w)} × ${Number(item.bbox_h)}`
+	              : '-- × --'
+	          )
+	        }));
+	      }
+
+	      const bboxX = Number(yolo.bbox_x || 0);
+	      const bboxY = Number(yolo.bbox_y || 0);
+	      const bboxW = Number(yolo.bbox_w || 0);
+	      const bboxH = Number(yolo.bbox_h || 0);
+	      if (!yolo.detected || bboxW <= 0 || bboxH <= 0) {
+	        return [];
+	      }
+	      return [{
+	        cls: yolo.class_name || 'unknown',
+	        conf: Number(yolo.confidence || 0),
+	        center: `(${Math.round(bboxX + bboxW / 2)}, ${Math.round(bboxY + bboxH / 2)})`,
+	        size: `${bboxW} × ${bboxH}`
+	      }];
+	    }
+
+	    function metadataUrlForPhoto(url) {
+	      if (!url || typeof url !== 'string') return '';
+	      return url.replace(/\.[^.?#/]+(?=($|[?#]))/, '.json');
+	    }
+
+	    async function fetchRecognitionMetadata(photoUrl) {
+	      const metadataUrl = metadataUrlForPhoto(photoUrl);
+	      if (!metadataUrl) return null;
+
+	      if (recognitionState.metadataUrl === metadataUrl && recognitionState.metadata) {
+	        return {
+	          metadata: recognitionState.metadata,
+	          trusted: recognitionState.metadataTrusted
+	        };
+	      }
+
+	      const response = await fetch(metadataUrl, { cache: 'no-store' });
+	      if (!response.ok) {
+	        return null;
+	      }
+
+	      const metadata = await response.json();
+	      const trusted = metadata.metadata_source === 'capture' ||
+	        metadata.report === 'saved photo metadata';
+	      recognitionState.metadataUrl = metadataUrl;
+	      recognitionState.metadata = metadata;
+	      recognitionState.metadataTrusted = trusted;
+	      return { metadata, trusted };
+	    }
+
+	    function renderRecognitionState(yolo) {
+	      const preview = document.getElementById('rgb-yolo-photo-preview');
+	      const empty = document.getElementById('rgb-yolo-photo-empty');
+	      const photoPath = document.getElementById('rgb-yolo-photo-path');
+	      const photoLink = document.getElementById('rgb-yolo-photo-link');
+	      const recognitionCount = document.getElementById('recognition-count');
+	      const rgbModuleState = document.getElementById('rgb-module-state');
+
+	      if (!preview || !empty || !photoPath || !photoLink || !recognitionCount || !rgbModuleState) {
+	        return;
+	      }
+
+	      if (!yolo) {
+	        recognitionCount.textContent = '0 个目标';
+	        rgbModuleState.textContent = '等待 / 未接入';
+	        photoPath.textContent = '等待识别链上传图片...';
+	        preview.hidden = true;
+	        preview.removeAttribute('src');
+	        empty.hidden = false;
+	        empty.textContent = '暂无识别抓拍';
+	        photoLink.hidden = true;
+	        photoLink.removeAttribute('href');
+	        renderDetections('yolo-table-body-recognition', []);
+	        recognitionState.photoUrl = '';
+	        recognitionState.metadataUrl = '';
+	        recognitionState.metadata = null;
+	        recognitionState.metadataTrusted = false;
+	        return;
+	      }
+
+	      const detectionRows = buildDetectionRows(yolo);
+	      const untrustedHistoryTable = Boolean(yolo.last_photo_url && yolo.history_table_untrusted);
+	      if (untrustedHistoryTable) {
+	        recognitionCount.textContent = '表格停用';
+	        renderDetections(
+	          'yolo-table-body-recognition',
+	          [],
+	          '旧历史图没有原始检测表，当前不显示估算结果');
+	      } else {
+	        const count = detectionRows.length > 0
+	          ? detectionRows.length
+	          : (Number(
+	              yolo.detections_count ??
+	              (Array.isArray(yolo.detections) ? yolo.detections.length : 0)
+	            ) || 0);
+	        recognitionCount.textContent = `${count} 个目标`;
+	        renderDetections('yolo-table-body-recognition', detectionRows);
+	      }
+
+	      if (yolo.online) {
+	        rgbModuleState.textContent = '正常 / YOLO Online';
+	      } else if (yolo.history_photo) {
+	        rgbModuleState.textContent = '离线 / 历史抓拍';
+	      } else if (yolo.model_ready) {
+	        rgbModuleState.textContent = '等待 / 相机未就绪';
+	      } else {
+	        rgbModuleState.textContent = '离线';
+	      }
+
+	      const url = yolo.last_photo_url || '';
+	      const path = yolo.last_photo_path || '';
+	      const time = yolo.last_photo_time || '';
+	      photoPath.textContent = path
+	        ? `${yolo.history_photo ? '历史抓拍: ' : ''}${path}${time ? ` @ ${time}` : ''}`
+	        : (yolo.photo_output_dir ? `照片目录: ${yolo.photo_output_dir}` : '等待识别抓拍...');
+
+	      if (url) {
+	        if (recognitionState.photoUrl !== url) {
+	          preview.src = url;
+	          recognitionState.photoUrl = url;
+	        }
+	        preview.hidden = false;
+	        empty.hidden = true;
+	        photoLink.hidden = false;
+	        photoLink.href = url;
+	      } else {
+	        preview.hidden = true;
+	        preview.removeAttribute('src');
+	        empty.hidden = false;
+	        empty.textContent = yolo.history_photo ? '当前识别链离线，回显最近一张历史抓拍' : '暂无识别抓拍';
+	        photoLink.hidden = true;
+	        photoLink.removeAttribute('href');
+	        recognitionState.photoUrl = '';
+	        recognitionState.metadataUrl = '';
+	        recognitionState.metadata = null;
+	        recognitionState.metadataTrusted = false;
+	      }
+	    }
+
+	    async function refreshDashboardState() {
+	      const requestId = ++recognitionState.requestId;
+	      try {
+	        const response = await fetch('/api/state', { cache: 'no-store' });
+	        if (!response.ok) {
+	          throw new Error(`HTTP ${response.status}`);
+	        }
+	        const data = await response.json();
+	        if (!data.ok || !data.state) {
+	          throw new Error(data.error || 'state request failed');
+	        }
+	        renderRuntimeState(data.state);
+	        let yolo = parseJsonPayload(data.state.rgb_yolo_payload);
+	        if (yolo && yolo.last_photo_url) {
+	          try {
+	            const result = await fetchRecognitionMetadata(yolo.last_photo_url);
+	            if (result && result.metadata) {
+	              const metadata = result.metadata;
+	              yolo = {
+	                ...yolo,
+	                ...metadata,
+	                online: yolo.online,
+	                camera_open: yolo.camera_open,
+	                model_ready: yolo.model_ready,
+	                source: yolo.source,
+	                error: yolo.error,
+	                history_table_untrusted: !result.trusted
+	              };
+	            } else {
+	              yolo = { ...yolo, history_table_untrusted: true };
+	            }
+	          } catch (_) {
+	            yolo = { ...yolo, history_table_untrusted: true };
+	          }
+	        }
+	        if (requestId !== recognitionState.requestId) {
+	          return;
+	        }
+	        renderRecognitionState(yolo);
+	      } catch (error) {
+	        renderRuntimeState(null);
+	        if (!recognitionState.photoUrl) {
+	          renderRecognitionState(null);
+	        }
+	      }
+	    }
+
+	    function initDashboardPolling() {
+	      refreshDashboardState();
+	      window.setInterval(refreshDashboardState, 1000);
+	    }
+
+    function switchPage(pageId) {
+      document.querySelectorAll('.page').forEach(page => page.classList.remove('active'));
+      const target = document.getElementById(pageId);
+      if (target) target.classList.add('active');
+
+      document.querySelectorAll('#side-nav button').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.pageTarget === pageId);
+      });
+
+      document.getElementById('page-sub-title').textContent = pageTitles[pageId] || '当前页面';
+    }
+
+    function initPageSwitch() {
+      document.querySelectorAll('#side-nav button').forEach(button => {
+        button.addEventListener('click', () => switchPage(button.dataset.pageTarget));
+      });
+    }
+
+    function setSystemMode(mode) {
+      const config = modeLabels[mode] || modeLabels.STOP;
+      workspaceState.activeMode = mode;
+      document.getElementById('mode-text').textContent = config.text;
+      document.getElementById('mode-badge').textContent = config.badge;
+
+      document.querySelectorAll('#mode-toggle button').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode.toUpperCase() === mode);
+      });
+
+      document.querySelectorAll('.mode-panel').forEach(panel => panel.classList.remove('active'));
+      const map = {
+        STOP: 'stop-mode-panel',
+        AUTO: 'auto-mode-panel',
+        AVOIDANCE: 'avoidance-mode-panel',
+        MANUAL: 'manual-mode-panel'
+      };
+      const target = document.getElementById(map[mode] || 'stop-mode-panel');
+      if (target) target.classList.add('active');
+    }
+
+    async function postJson(url, body = null) {
+      const options = {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      };
+      if (body !== null) {
+        options.body = JSON.stringify(body);
+      }
+
+      const response = await fetch(url, options);
+      const text = await response.text();
+      let payload = null;
+      try {
+        payload = text ? JSON.parse(text) : null;
+      } catch (error) {
+        throw new Error(`响应解析失败: ${error.message}`);
+      }
+
+      if (!response.ok) {
+        const message = payload && payload.message ? payload.message : `HTTP ${response.status}`;
+        throw new Error(message);
+      }
+
+      return payload || {};
+    }
+
+    function initModeToggle() {
+      document.querySelectorAll('#mode-toggle button').forEach(button => {
+        button.addEventListener('click', async () => {
+          const mode = button.dataset.mode.toUpperCase();
+          if (mode === workspaceState.activeMode || workspaceState.switching) {
+            return;
+          }
+
+          workspaceState.switching = true;
+          try {
+            const result = await postJson('/api/workspace/switch', { mode });
+            setSystemMode(result.mode || mode);
+          } finally {
+            workspaceState.switching = false;
+          }
+        });
+      });
+    }
+
+    function initManualControls() {
+      const speedSlider = document.getElementById('speed-slider');
+      const angleSlider = document.getElementById('angle-slider');
+      const speedValue = document.getElementById('speed-value');
+      const angleValue = document.getElementById('angle-value');
+      const speedFrame = document.getElementById('speed-frame');
+      const angleFrame = document.getElementById('angle-frame');
+      const status = document.getElementById('manual-command-status');
+
+      speedSlider.addEventListener('input', () => {
+        speedValue.textContent = speedSlider.value;
+        speedFrame.textContent = speedSlider.value;
+        status.textContent = `速度待发送：#C1=${speedSlider.value}!`;
+      });
+
+      angleSlider.addEventListener('input', () => {
+        angleValue.textContent = angleSlider.value;
+        angleFrame.textContent = angleSlider.value;
+        status.textContent = `转角待发送：#C2=${angleSlider.value}!`;
+      });
+
+      speedSlider.addEventListener('change', async () => {
+        const frame = `#C1=${speedSlider.value}!`;
+        status.textContent = `发送速度指令：${frame}`;
+        try {
+          const result = await postJson('/api/stm32/speed', { value: Number(speedSlider.value) });
+          status.textContent = `${result.message || '速度指令完成'}：${result.frame || frame}`;
+        } catch (error) {
+          status.textContent = `速度发送失败：${error.message}`;
+        }
+      });
+
+      angleSlider.addEventListener('change', async () => {
+        const frame = `#C2=${angleSlider.value}!`;
+        status.textContent = `发送转角指令：${frame}`;
+        try {
+          const result = await postJson('/api/stm32/angle', { value: Number(angleSlider.value) });
+          status.textContent = `${result.message || '转角指令完成'}：${result.frame || frame}`;
+        } catch (error) {
+          status.textContent = `转角发送失败：${error.message}`;
+        }
+      });
+
+      document.querySelectorAll('[data-manual-cmd]').forEach(button => {
+        button.addEventListener('click', async () => {
+          const cmd = button.dataset.manualCmd;
+          const commandMap = {
+            stop: { url: '/api/stm32/stop', frame: '#C3=0!' },
+            start: { url: '/api/stm32/start', frame: '#C3=1!' },
+            restart: { url: '/api/stm32/restart', frame: '#C3=2!' },
+            turnback: { url: '/api/stm32/turnback', frame: '#C3=3!' }
+          };
+          const command = commandMap[cmd];
+          if (!command) {
+            return;
+          }
+
+          status.textContent = `发送模式指令：${command.frame}`;
+          try {
+            const result = await postJson(command.url);
+            status.textContent = `${result.message || '模式指令完成'}：${result.frame || command.frame}`;
+          } catch (error) {
+            status.textContent = `模式发送失败：${error.message}`;
+          }
+        });
+      });
+    }
+
+    function initSystemRestart() {
+      const button = document.getElementById('system-restart-btn');
+      if (!button) return;
+      button.addEventListener('click', async () => {
+        try {
+          button.disabled = true;
+          const systemState = document.getElementById('system-state');
+          const systemBadge = document.getElementById('system-badge');
+          if (systemState && systemBadge) {
+            systemState.textContent = '重启中';
+            systemBadge.textContent = 'RESTART';
+            systemBadge.classList.add('warn');
+          }
+          await postJson('/api/system/restart', {});
+        } catch (error) {
+          console.error('system restart failed', error);
+          const systemState = document.getElementById('system-state');
+          const systemBadge = document.getElementById('system-badge');
+          if (systemState && systemBadge) {
+            systemState.textContent = '重启失败';
+            systemBadge.textContent = 'ERROR';
+            systemBadge.classList.add('warn');
+          }
+        } finally {
+          button.disabled = false;
+        }
+      });
+    }
+
+    function initSystemStart() {
+      const button = document.getElementById('system-start-btn');
+      if (!button) return;
+      button.addEventListener('click', async () => {
+        try {
+          button.disabled = true;
+          const systemState = document.getElementById('system-state');
+          const systemBadge = document.getElementById('system-badge');
+          if (systemState && systemBadge) {
+            systemState.textContent = '启动中';
+            systemBadge.textContent = 'STARTING';
+            systemBadge.classList.add('warn');
+          }
+          await postJson('/api/system/start', {});
+        } catch (error) {
+          console.error('system start failed', error);
+          const systemState = document.getElementById('system-state');
+          const systemBadge = document.getElementById('system-badge');
+          if (systemState && systemBadge) {
+            systemState.textContent = '启动失败';
+            systemBadge.textContent = 'ERROR';
+            systemBadge.classList.add('warn');
+          }
+        } finally {
+          button.disabled = false;
+        }
+      });
+    }
+
+    function initEmergencyStop() {
+      const button = document.getElementById('system-emergency-stop-btn');
+      if (!button) return;
+      button.addEventListener('click', async () => {
+        try {
+          button.disabled = true;
+          const systemState = document.getElementById('system-state');
+          const systemBadge = document.getElementById('system-badge');
+          if (systemState && systemBadge) {
+            systemState.textContent = '紧急停止中';
+            systemBadge.textContent = 'STOPPING';
+            systemBadge.classList.add('warn');
+          }
+          await postJson('/api/system/emergency_stop', {});
+        } catch (error) {
+          console.error('emergency stop failed', error);
+          const systemState = document.getElementById('system-state');
+          const systemBadge = document.getElementById('system-badge');
+          if (systemState && systemBadge) {
+            systemState.textContent = '紧急停止失败';
+            systemBadge.textContent = 'ERROR';
+            systemBadge.classList.add('warn');
+          }
+        } finally {
+          button.disabled = false;
+        }
+      });
+    }
+
+	    initDashboardDefaults();
+	    initPageSwitch();
+	    initModeToggle();
+	    initLogStream();
+	    initDashboardPolling();
+	    initManualControls();
+      initSystemRestart();
+      initSystemStart();
+      initEmergencyStop();
+	  </script>
+</body>
+</html>

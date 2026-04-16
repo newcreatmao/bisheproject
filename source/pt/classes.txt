@@ -1,0 +1,10 @@
+Obstacle_jin
+Obstacle_lan
+Obstacle_car1
+Obstacle_tree
+Obstacle_car2
+Obstacle_car3
+Obstacle_car4
+Obstacle_people
+Obstacle_car5
+Obstacle_tree1
