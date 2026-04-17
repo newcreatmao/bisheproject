@@ -8,6 +8,7 @@
 #include <string>
 #include <thread>
 
+#include "control/auto_avoid.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -18,10 +19,6 @@
 
 class ToStm;
 class UART;
-
-namespace bishe::tools {
-class GruDataRecorder;
-}
 
 class LogDashboardServer {
 public:
@@ -69,6 +66,13 @@ private:
     };
 
     struct LidarRuntimeState {
+        struct SectorRuntimeState {
+            bool valid = false;
+            double nearest_m = 0.0;
+            double nearest_angle_deg = 0.0;
+            int valid_points = 0;
+        };
+
         std::uint64_t message_count = 0;
         std::chrono::steady_clock::time_point last_message_steady_{};
         bool valid = false;
@@ -76,6 +80,10 @@ private:
         double nearest_m = 0.0;
         double nearest_angle_deg = 0.0;
         int valid_points = 0;
+        SectorRuntimeState negative_front_sector;
+        SectorRuntimeState front_sector;
+        SectorRuntimeState positive_front_sector;
+        std::string front_nearest_zone;
     };
 
     struct Stm32HealthState {
@@ -101,9 +109,14 @@ private:
     void stopHealthMonitor();
     void startRuntimeLogBridge();
     void stopRuntimeLogBridge();
-    void startGruDataRecorder();
-    void stopGruDataRecorder();
-    void recordGruDataSnapshot();
+    void startAutoAvoidControl();
+    void stopAutoAvoidControl();
+    void runAutoAvoidControlLoop();
+    AutoAvoidController::SensorSnapshot autoAvoidSensorSnapshot() const;
+    void applyAutoAvoidCommand(
+        const AutoAvoidController::Command& command,
+        AutoAvoidController::Command& last_command,
+        bool& has_last_command);
     void onDepthImage(const sensor_msgs::msg::Image::SharedPtr msg);
     void onLidarScan(const sensor_msgs::msg::LaserScan::SharedPtr msg);
     void onImu(const sensor_msgs::msg::Imu::SharedPtr msg);
@@ -127,14 +140,17 @@ private:
     std::unique_ptr<ToStm> to_stm_;
     std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> executor_;
     std::thread spin_thread_;
-    rclcpp::TimerBase::SharedPtr gru_record_timer_;
-    std::unique_ptr<bishe::tools::GruDataRecorder> gru_data_recorder_;
     std::atomic<bool> health_monitor_running_{false};
     std::thread health_monitor_thread_;
     std::atomic<bool> runtime_log_bridge_running_{false};
     std::thread runtime_log_bridge_thread_;
+    std::atomic<bool> auto_avoid_control_running_{false};
+    std::atomic<bool> auto_avoid_stm32_drive_enabled_{false};
+    std::atomic<bool> stm32_emergency_active_{false};
+    std::thread auto_avoid_control_thread_;
     mutable std::mutex state_mutex_;
     mutable std::mutex stm32_mutex_;
+    AutoAvoidController auto_avoid_controller_;
     DepthRuntimeState depth_state_;
     LidarRuntimeState lidar_state_;
     ImuRuntimeState imu_state_;

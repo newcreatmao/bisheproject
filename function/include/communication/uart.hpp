@@ -16,6 +16,7 @@ public:
     bool close_uart();
 
     bool send_string(const std::string& str, bool quiet = false);
+    bool send_string_wait_ok(const std::string& str, bool quiet = false, int timeout_ms = 300);
     std::string receive_string();
 
     void start_receive_thread();
@@ -27,6 +28,7 @@ private:
     void updateStatusSnapshotLocked() const;
     std::string nowIsoSeconds() const;
     bool wait_for_reply_locked(int previous_recv_count, int timeout_ms);
+    bool wait_for_ok_reply_locked(int previous_recv_count, int timeout_ms);
 
 private:
     int uart_fd_;
@@ -40,6 +42,7 @@ private:
     std::condition_variable recv_cv_;
     std::string last_sent_;
     std::string last_received_;
+    std::string reply_buffer_;
     std::string last_update_time_;
     std::deque<std::string> recent_history_;
 };

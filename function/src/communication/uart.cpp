@@ -3,6 +3,7 @@
 
 #include <cerrno>
 #include <chrono>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -39,6 +40,15 @@ std::string trimTrailingWhitespace(const std::string& value) {
         return "";
     }
     return value.substr(0, end + 1);
+}
+
+bool containsOkReply(const std::string& value) {
+    std::string normalized;
+    normalized.reserve(value.size());
+    for (const unsigned char ch : value) {
+        normalized.push_back(static_cast<char>(std::tolower(ch)));
+    }
+    return normalized.find("ok") != std::string::npos;
 }
 
 }  // namespace
@@ -165,6 +175,56 @@ bool UART::send_string(const std::string& str, bool quiet) {
     return true;
 }
 
+bool UART::send_string_wait_ok(const std::string& str, bool quiet, int timeout_ms) {
+    if (uart_fd_ < 0) {
+        if (!quiet) {
+            log_warn("UART", "send fail: uart not open");
+        }
+        return false;
+    }
+
+    if (str.empty()) {
+        if (!quiet) {
+            log_warn("UART", "send fail: empty string");
+        }
+        return false;
+    }
+
+    int previous_recv_count = 0;
+    {
+        std::lock_guard<std::mutex> recv_lock(recv_mutex_);
+        previous_recv_count = recv_counter_;
+        reply_buffer_.clear();
+    }
+
+    const ssize_t sent = write(uart_fd_, str.c_str(), str.size());
+    if (sent < 0) {
+        if (!quiet) {
+            log_error("UART", "send fail, errno=" + std::to_string(errno));
+        }
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(status_mutex_);
+        last_sent_ = str;
+        last_update_time_ = nowIsoSeconds();
+        pushHistoryLocked(last_update_time_ + " TX " + trimTrailingWhitespace(str));
+        updateStatusSnapshotLocked();
+    }
+
+    if (!quiet) {
+        log_info("UART", "send: " + str);
+    }
+    if (!wait_for_ok_reply_locked(previous_recv_count, timeout_ms)) {
+        if (!quiet) {
+            log_warn("UART", "send timeout waiting ok reply: " + str);
+        }
+        return false;
+    }
+    return true;
+}
+
 std::string UART::receive_string() {
     if (uart_fd_ < 0) {
         return "";
@@ -186,6 +246,10 @@ void UART::receive_loop() {
         if (!data.empty()) {
             {
                 std::lock_guard<std::mutex> recv_lock(recv_mutex_);
+                reply_buffer_ += data;
+                if (reply_buffer_.size() > 256) {
+                    reply_buffer_.erase(0, reply_buffer_.size() - 256);
+                }
                 recv_counter_++;
             }
             {
@@ -254,6 +318,16 @@ void UART::updateStatusSnapshotLocked() const {
     for (const auto& entry : recent_history_) {
         output << entry << "\n";
     }
+}
+
+bool UART::wait_for_ok_reply_locked(int previous_recv_count, int timeout_ms) {
+    std::unique_lock<std::mutex> lock(recv_mutex_);
+    return recv_cv_.wait_for(
+        lock,
+        std::chrono::milliseconds(timeout_ms),
+        [this, previous_recv_count]() {
+            return recv_counter_ > previous_recv_count && containsOkReply(reply_buffer_);
+        });
 }
 
 bool UART::wait_for_reply_locked(int previous_recv_count, int timeout_ms) {

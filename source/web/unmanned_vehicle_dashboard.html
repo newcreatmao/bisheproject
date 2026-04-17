@@ -629,6 +629,58 @@
       font-size: 12px;
     }
 
+    .avoidance-box {
+      display: grid;
+      gap: 14px;
+    }
+
+    .avoidance-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .avoidance-actions button {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 13px;
+    }
+
+    .lidar-sector-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .lidar-sector-card {
+      min-height: 112px;
+      padding: 14px;
+      border-radius: 15px;
+      background:
+        radial-gradient(circle at 16% 12%, rgba(77,163,255,.12), transparent 42%),
+        linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+      border: 1px solid rgba(255,255,255,.06);
+    }
+
+    .lidar-sector-card .sector-label {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .lidar-sector-card strong {
+      display: block;
+      margin-top: 12px;
+      font-size: 28px;
+      line-height: 1;
+    }
+
+    .lidar-sector-card .sector-note {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
     .slider-head {
       display: flex;
       justify-content: space-between;
@@ -689,7 +741,8 @@
       .device-grid,
       .control-grid,
       .observation-grid,
-      .action-row {
+      .action-row,
+      .lidar-sector-grid {
         grid-template-columns: 1fr;
       }
     }
@@ -699,7 +752,8 @@
       .sidebar { position: relative; height: auto; }
       .summary,
       .mini-grid,
-      .manual-buttons { grid-template-columns: 1fr; }
+      .manual-buttons,
+      .avoidance-actions { grid-template-columns: 1fr; }
       .main { padding: 14px; }
     }
   </style>
@@ -790,7 +844,40 @@
                     <div class="mode-panel" id="avoidance-mode-panel">
                       <div class="subcard">
                         <div class="block-title"><h4>避障模式控制</h4><span class="tiny-chip success">AVOIDANCE</span></div>
-                        <p class="muted" style="margin:0;">避障工作区预留，当前不绑定任何控制指令。</p>
+                        <div class="avoidance-box">
+                          <div>
+                            <p class="muted" id="avoidance-task-status" style="margin:0;">当前未发送避障任务指令。</p>
+                          </div>
+                          <div class="avoidance-actions" aria-label="避障任务控制">
+                            <button class="btn-success" type="button" id="avoidance-task-start-btn">开始任务</button>
+                            <button class="btn-danger" type="button" id="avoidance-task-stop-btn">停止任务</button>
+                          </div>
+                          <div class="lidar-sector-grid" aria-label="雷达扇区最近距离">
+                            <div class="lidar-sector-card">
+                              <div class="sector-label">-90° 到 -60° 最近距离</div>
+                              <strong id="lidar-sector-negative-distance">--</strong>
+                              <div class="sector-note">角度：<span id="lidar-sector-negative-angle">--</span></div>
+                              <div class="sector-note">负角前侧雷达区域</div>
+                            </div>
+                            <div class="lidar-sector-card">
+                              <div class="sector-label">-60° 到 60° 最近距离</div>
+                              <strong id="lidar-sector-front-distance">--</strong>
+                              <div class="sector-note">角度：<span id="lidar-sector-front-angle">--</span></div>
+                              <div class="sector-note">正前方雷达区域</div>
+                            </div>
+                            <div class="lidar-sector-card">
+                              <div class="sector-label">60° 到 90° 最近距离</div>
+                              <strong id="lidar-sector-positive-distance">--</strong>
+                              <div class="sector-note">角度：<span id="lidar-sector-positive-angle">--</span></div>
+                              <div class="sector-note">正角前侧雷达区域</div>
+                            </div>
+                          </div>
+                          <div class="row" aria-label="最近障碍物所在区域">
+                            <span class="label">最近障碍物在哪</span>
+                            <strong id="avoidance-nearest-zone">--</strong>
+                            <span class="tiny-chip">左 / 中 / 右</span>
+                          </div>
+                        </div>
                       </div>
                     </div>
 
@@ -815,9 +902,9 @@
                         </div>
 
                         <div class="slider-group">
-                          <div class="slider-head"><span>速度滑条（sendSpeed / #C1，cm/s）</span><span class="slider-value" id="speed-value">27</span></div>
-                          <input id="speed-slider" type="range" min="0" max="100" step="1" value="27" />
-                          <div class="range-note">发送示例：<code>#C1=<span id="speed-frame">27</span>!</code></div>
+                          <div class="slider-head"><span>速度滑条（sendSpeed / #C1，cm/s）</span><span class="slider-value" id="speed-value">36</span></div>
+                          <input id="speed-slider" type="range" min="0" max="100" step="1" value="36" />
+                          <div class="range-note">发送示例：<code>#C1=<span id="speed-frame">36</span>!</code></div>
                         </div>
 
                         <div class="slider-group">
@@ -832,12 +919,21 @@
               </div>
 
               <div class="card">
-                <div class="card-body logs">
+                <div class="card-body">
                   <div class="panel-title">
-                    <h3>系统日志</h3>
+                    <h3>关键显示</h3>
                     <span>位于控制接口右侧</span>
                   </div>
-                  <pre id="log-box">正在连接日志流...</pre>
+                  <div class="key-list">
+                    <div class="row"><span class="label">纬度</span><strong id="lat-text">--</strong></div>
+                    <div class="row"><span class="label">经度</span><strong id="lon-text">--</strong></div>
+                    <div class="row"><span class="label">姿态角</span><strong id="attitude-text">--</strong></div>
+                    <div class="row"><span class="label">深度相机最近障碍</span><strong id="depth-nearest-obstacle">--</strong></div>
+                    <div class="row"><span class="label">雷达最小距离</span><strong id="lidar-nearest-obstacle">--</strong></div>
+                    <div class="row"><span class="label">最近空间障碍物</span><strong id="nearest-obstacle">--</strong></div>
+                    <div class="row"><span class="label">车辆真实速度</span><strong id="vehicle-speed-text">--</strong></div>
+                    <div class="row"><span class="label">车辆角度值</span><strong id="vehicle-angle-text">--</strong></div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -872,21 +968,12 @@
               </div>
 
               <div class="card">
-                <div class="card-body">
+                <div class="card-body logs">
                   <div class="panel-title">
-                    <h3>关键显示</h3>
+                    <h3>系统日志</h3>
                     <span>位于识别显示右侧</span>
                   </div>
-                  <div class="key-list">
-                    <div class="row"><span class="label">纬度</span><strong id="lat-text">--</strong></div>
-                    <div class="row"><span class="label">经度</span><strong id="lon-text">--</strong></div>
-                    <div class="row"><span class="label">姿态角</span><strong id="attitude-text">--</strong></div>
-                    <div class="row"><span class="label">深度相机最近障碍</span><strong id="depth-nearest-obstacle">--</strong></div>
-                    <div class="row"><span class="label">雷达最小距离</span><strong id="lidar-nearest-obstacle">--</strong></div>
-                    <div class="row"><span class="label">最近空间障碍物</span><strong id="nearest-obstacle">--</strong></div>
-                    <div class="row"><span class="label">车辆真实速度</span><strong id="vehicle-speed-text">--</strong></div>
-                    <div class="row"><span class="label">车辆角度值</span><strong id="vehicle-angle-text">--</strong></div>
-                  </div>
+                  <pre id="log-box">正在连接日志流...</pre>
                 </div>
               </div>
             </div>
@@ -970,6 +1057,13 @@
 	      setText('depth-ratio-bound', '--');
 	      setText('lidar-front-bound', '--');
 	      setText('lidar-points-bound', '--');
+	      setText('lidar-sector-negative-distance', '--');
+	      setText('lidar-sector-front-distance', '--');
+	      setText('lidar-sector-positive-distance', '--');
+	      setText('lidar-sector-negative-angle', '--');
+	      setText('lidar-sector-front-angle', '--');
+	      setText('lidar-sector-positive-angle', '--');
+	      setText('avoidance-nearest-zone', '--');
 	      setText('lat-text', '--');
 	      setText('lon-text', '--');
 	      setText('attitude-text', '--');
@@ -1003,6 +1097,20 @@
 	      }
 	      const encoderTarget = stm32DisplayConfig.turnLimitEncoder + angle;
 	      return `C2 ${integerText(angle)} / 编码器目标 ${integerText(encoderTarget)}`;
+	    }
+
+	    function lidarSectorDistanceText(sector) {
+	      const distance = finiteNumber(sector && sector.nearest_m);
+	      return sector && sector.valid && distance !== null
+	        ? `${distance.toFixed(2)} m`
+	        : '--';
+	    }
+
+	    function lidarSectorAngleText(sector) {
+	      const angle = finiteNumber(sector && sector.nearest_angle_deg);
+	      return sector && sector.valid && angle !== null
+	        ? `${angle.toFixed(1)}°`
+	        : '--';
 	    }
 
 	    function renderKeyDisplay(keyDisplay) {
@@ -1040,6 +1148,17 @@
 	        : '等待观测');
 	      setText('vehicle-speed-text', vehicle.speed_valid ? `${vehicle.speed} cm/s` : '--');
 	      setText('vehicle-angle-text', vehicle.angle_valid ? vehicleAngleText(vehicle.angle) : '--');
+	    }
+
+	    function renderLidarSectors(lidar) {
+	      const lidarSectors = lidar && lidar.sectors ? lidar.sectors : {};
+	      setText('lidar-sector-negative-distance', lidarSectorDistanceText(lidarSectors.negative_front));
+	      setText('lidar-sector-front-distance', lidarSectorDistanceText(lidarSectors.front));
+	      setText('lidar-sector-positive-distance', lidarSectorDistanceText(lidarSectors.positive_front));
+	      setText('lidar-sector-negative-angle', lidarSectorAngleText(lidarSectors.negative_front));
+	      setText('lidar-sector-front-angle', lidarSectorAngleText(lidarSectors.front));
+	      setText('lidar-sector-positive-angle', lidarSectorAngleText(lidarSectors.positive_front));
+	      setText('avoidance-nearest-zone', lidar && lidar.front_nearest_zone ? lidar.front_nearest_zone : '--');
 	    }
 
 	    function renderRuntimeState(state) {
@@ -1417,6 +1536,27 @@
 	      window.setInterval(refreshDashboardState, 1000);
 	    }
 
+	    async function refreshLidarSectors() {
+	      try {
+	        const response = await fetch('/api/lidar/sectors', { cache: 'no-store' });
+	        if (!response.ok) {
+	          throw new Error(`HTTP ${response.status}`);
+	        }
+	        const data = await response.json();
+	        if (!data.ok || !data.lidar) {
+	          throw new Error(data.error || 'lidar sectors request failed');
+	        }
+	        renderLidarSectors(data.lidar);
+	      } catch (_) {
+	        renderLidarSectors(null);
+	      }
+	    }
+
+	    function initLidarSectorPolling() {
+	      refreshLidarSectors();
+	      window.setInterval(refreshLidarSectors, 200);
+	    }
+
     function switchPage(pageId) {
       document.querySelectorAll('.page').forEach(page => page.classList.remove('active'));
       const target = document.getElementById(pageId);
@@ -1571,6 +1711,49 @@
       });
     }
 
+    function initAvoidanceTaskControls() {
+      const status = document.getElementById('avoidance-task-status');
+      const commandMap = {
+        start: {
+          button: document.getElementById('avoidance-task-start-btn'),
+          url: '/api/avoidance/start',
+          frame: '#C3=1!',
+          pendingText: '正在发送避障开始任务指令'
+        },
+        stop: {
+          button: document.getElementById('avoidance-task-stop-btn'),
+          url: '/api/avoidance/stop',
+          frame: '#C3=0!',
+          pendingText: '正在发送避障停止任务指令'
+        }
+      };
+
+      Object.values(commandMap).forEach(command => {
+        if (!command.button) {
+          return;
+        }
+
+        command.button.addEventListener('click', async () => {
+          command.button.disabled = true;
+          if (status) {
+            status.textContent = `${command.pendingText}：${command.frame}`;
+          }
+          try {
+            const result = await postJson(command.url);
+            if (status) {
+              status.textContent = `${result.message || '避障任务指令完成'}：${result.frame || command.frame}`;
+            }
+          } catch (error) {
+            if (status) {
+              status.textContent = `避障任务指令发送失败：${error.message}`;
+            }
+          } finally {
+            command.button.disabled = false;
+          }
+        });
+      });
+    }
+
     function initSystemRestart() {
       const button = document.getElementById('system-restart-btn');
       if (!button) return;
@@ -1609,17 +1792,28 @@
           const systemState = document.getElementById('system-state');
           const systemBadge = document.getElementById('system-badge');
           if (systemState && systemBadge) {
-            systemState.textContent = '启动中';
+            systemState.textContent = '解除急停中';
+            systemBadge.textContent = 'RELEASE';
+            systemBadge.classList.add('warn');
+          }
+          const releaseResult = await postJson('/api/system/emergency_release', {});
+          if (systemState && systemBadge) {
+            systemState.textContent = releaseResult.message || '急停已解除';
             systemBadge.textContent = 'STARTING';
             systemBadge.classList.add('warn');
           }
-          await postJson('/api/system/start', {});
+          const startResult = await postJson('/api/system/start', {});
+          if (systemState && systemBadge) {
+            systemState.textContent = startResult.message || '系统启动已触发';
+            systemBadge.textContent = 'STARTING';
+            systemBadge.classList.add('warn');
+          }
         } catch (error) {
-          console.error('system start failed', error);
+          console.error('system start or emergency release failed', error);
           const systemState = document.getElementById('system-state');
           const systemBadge = document.getElementById('system-badge');
           if (systemState && systemBadge) {
-            systemState.textContent = '启动失败';
+            systemState.textContent = '开始任务失败';
             systemBadge.textContent = 'ERROR';
             systemBadge.classList.add('warn');
           }
@@ -1642,7 +1836,12 @@
             systemBadge.textContent = 'STOPPING';
             systemBadge.classList.add('warn');
           }
-          await postJson('/api/system/emergency_stop', {});
+          const result = await postJson('/api/system/emergency_stop', {});
+          if (systemState && systemBadge) {
+            systemState.textContent = result.message || '急停已触发';
+            systemBadge.textContent = 'ESTOP';
+            systemBadge.classList.add('warn');
+          }
         } catch (error) {
           console.error('emergency stop failed', error);
           const systemState = document.getElementById('system-state');
@@ -1663,7 +1862,9 @@
 	    initModeToggle();
 	    initLogStream();
 	    initDashboardPolling();
+	    initLidarSectorPolling();
 	    initManualControls();
+      initAvoidanceTaskControls();
       initSystemRestart();
       initSystemStart();
       initEmergencyStop();

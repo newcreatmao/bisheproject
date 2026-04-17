@@ -38,8 +38,9 @@ set(PROJECT_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/function/include)
 set(PROJECT_CORE_SOURCES
     function/src/common/logger.cpp
     function/src/communication/uart.cpp
+    function/src/control/Judgment.cpp
+    function/src/control/auto_avoid.cpp
     function/src/control/to_stm.cpp
-    function/src/tools/gru_data_recorder.cpp
     function/src/web/log_dashboard_server.cpp
 )
 
@@ -100,6 +101,24 @@ ament_target_dependencies(lsn10_serial_scan_node
 )
 target_link_libraries(lsn10_serial_scan_node pthread)
 
+add_executable(imu_corrector_node
+    function/src/tools/imu_corrector_node.cpp
+)
+target_include_directories(imu_corrector_node
+    PRIVATE
+        ${PROJECT_INCLUDE_DIR}
+)
+ament_target_dependencies(imu_corrector_node
+    geometry_msgs
+    rclcpp
+    sensor_msgs
+    std_msgs
+)
+target_link_libraries(imu_corrector_node
+    project_sensor_components
+    pthread
+)
+
 add_executable(rgb_yolo_detector
     function/src/tools/rgb_yolo_detector.cpp
 )
@@ -124,6 +143,9 @@ set_target_properties(project PROPERTIES
 set_target_properties(lsn10_serial_scan_node PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin
 )
+set_target_properties(imu_corrector_node PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin
+)
 set_target_properties(rgb_yolo_detector PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin
     BUILD_RPATH ${ONNXRUNTIME_LIB_DIR}
@@ -133,6 +155,7 @@ set_target_properties(rgb_yolo_detector PROPERTIES
 install(TARGETS
     project
     lsn10_serial_scan_node
+    imu_corrector_node
     rgb_yolo_detector
     DESTINATION lib/${PROJECT_NAME}
 )

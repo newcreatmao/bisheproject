@@ -43,6 +43,21 @@ def generate_launch_description():
         output='screen',
     )
 
+    imu_corrector_process = Node(
+        package='project',
+        executable='imu_corrector_node',
+        name='project_imu_corrector',
+        parameters=[{
+            'imu_topic': '/imu/data_raw',
+            'corrected_imu_topic': '/imu/data_corrected',
+            'corrected_imu_frame': 'base_link',
+            'publish_corrected_imu': True,
+            'imu_mount_correction_enabled': True,
+            'calibration_samples': 100,
+        }],
+        output='screen',
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument('imu_port', default_value='/dev/imu'),
         DeclareLaunchArgument('imu_baud', default_value='460800'),
@@ -51,7 +66,7 @@ def generate_launch_description():
         RegisterEventHandler(
             OnProcessExit(
                 target_action=imu_setup_process,
-                on_exit=[yesense_process],
+                on_exit=[yesense_process, imu_corrector_process],
             )
         ),
     ])
