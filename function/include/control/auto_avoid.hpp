@@ -61,6 +61,7 @@ public:
         BoundaryStop,
         FrontInvalid,
         SectorBuffer,
+        SectorBufferContinue,
         EmergencyStop,
         FrontZoneBuffer,
         FrontAvoidanceImu,
@@ -85,6 +86,14 @@ public:
         None,
         FrontObstacleLinear,
         ClearanceHoldFixed
+    };
+
+    enum class PathReferenceClearReason {
+        None,
+        ControllerReset,
+        InvalidInput,
+        SafetyStop,
+        AvoidanceCompleted
     };
 
     enum class TargetYawClearReason {
@@ -115,9 +124,12 @@ public:
         int front_spike_max_support_points = 4;
         double caution_turn_angle_deg = 10.0;
         double center_turn_angle_deg = 18.0;
+        int sector_buffer_continue_speed_cm_s = 24;
+        double sector_buffer_continue_turn_angle_deg = 8.0;
         double heading_kp = 0.55;
         double straight_heading_tolerance_deg = 0.35;
         double return_heading_kp = 0.35;
+        int return_heading_min_hold_ticks = 6;
         double avoidance_heading_kp_far = 0.65;
         double avoidance_heading_kp_near = 1.35;
         double avoidance_target_min_delta_deg = 13.0;
@@ -131,6 +143,13 @@ public:
         double return_heading_tolerance_deg = 2.5;
         double straight_heading_max_correction_deg = 6.0;
         double caution_heading_max_correction_deg = 6.0;
+        double lateral_balance_min_side_distance_m = 0.75;
+        double lateral_balance_gain_deg_per_m = 5.0;
+        double lateral_balance_max_correction_deg = 1.8;
+        double return_to_path_balance_gain_deg_per_m = 6.0;
+        double return_to_path_balance_max_correction_deg = 2.8;
+        double return_to_path_balance_tolerance_m = 0.18;
+        int return_to_path_settle_confirm_ticks = 4;
         double max_usable_yaw_error_deg = 45.0;
         int imu_heading_deadband_start_encoder = 6;
         int imu_heading_min_effective_encoder = 20;
@@ -169,12 +188,36 @@ public:
         bool spike_suppressed = false;
         bool zone_stabilized = false;
         bool zone_ambiguous = false;
+        bool sector_buffer_active_continue = false;
         bool boundary_stop = false;
         bool emergency_stop = false;
         bool replan_triggered = false;
+        bool return_heading_protected = false;
+        int return_heading_protect_ticks_remaining = 0;
+        bool lateral_balance_active = false;
+        double lateral_balance_correction_deg = 0.0;
+        bool path_reference_valid = false;
+        double reference_yaw_deg = 0.0;
+        double reference_side_balance = 0.0;
+        double reference_left_distance_m = 0.0;
+        double reference_right_distance_m = 0.0;
+        std::int64_t path_reference_captured_ms = 0;
+        AvoidanceStage path_reference_captured_stage = AvoidanceStage::Idle;
+        bool path_reference_captured_this_cycle = false;
+        bool return_to_path_active = false;
+        double yaw_recovery_correction_deg = 0.0;
+        double path_recovery_correction_deg = 0.0;
+        double combined_return_correction_deg = 0.0;
+        bool tail_clearance_complete = false;
+        bool tail_clearance_blocking = false;
+        bool path_recovery_ready = false;
+        bool path_recovery_settled = false;
+        bool exit_to_idle_ready = false;
         bool used_imu_heading = false;
         bool used_encoder_fallback = false;
         EncoderFallbackKind encoder_fallback_kind = EncoderFallbackKind::None;
+        PathReferenceClearReason path_reference_clear_reason =
+            PathReferenceClearReason::None;
         bool target_yaw_valid = false;
         double target_yaw_deg = 0.0;
         std::int64_t target_yaw_locked_ms = 0;
@@ -218,6 +261,7 @@ public:
     static const char* decisionReasonName(DecisionReason reason);
     static const char* fallbackReasonName(FallbackReason reason);
     static const char* encoderFallbackKindName(EncoderFallbackKind kind);
+    static const char* pathReferenceClearReasonName(PathReferenceClearReason reason);
     static const char* targetYawClearReasonName(TargetYawClearReason reason);
 
 private:
@@ -264,6 +308,8 @@ private:
         bool tail_side_clear_phase_started = false;
         double clearance_hold_progress_m = 0.0;
         double tail_post_clear_progress_m = 0.0;
+        int return_heading_ticks = 0;
+        int return_to_path_settle_ticks = 0;
     };
 
     struct SteeringSmoothingState {
@@ -278,6 +324,18 @@ private:
         AvoidanceStage locked_by_stage = AvoidanceStage::Idle;
         bool locked_this_cycle = false;
         TargetYawClearReason last_clear_reason = TargetYawClearReason::None;
+    };
+
+    struct PathReferenceState {
+        bool valid = false;
+        double reference_yaw_deg = 0.0;
+        double reference_side_balance = 0.0;
+        double reference_left_distance_m = 0.0;
+        double reference_right_distance_m = 0.0;
+        std::int64_t captured_steady_ms = 0;
+        bool captured_this_cycle = false;
+        AvoidanceStage captured_stage = AvoidanceStage::Idle;
+        PathReferenceClearReason clear_reason = PathReferenceClearReason::None;
     };
 
     struct FrontSpikeFilterResult {
@@ -296,6 +354,8 @@ private:
     SensorSnapshot filteredSnapshot(const SensorSnapshot& snapshot);
     SnapshotAssessment assessSnapshot(const SensorSnapshot& snapshot);
     DebugInfo baseDebugInfo(const SnapshotAssessment& assessment) const;
+    void capturePathReferenceIfNeeded(const SnapshotAssessment& assessment);
+    void clearPathReference(PathReferenceClearReason reason);
     Command decideTooCloseFront(
         const SnapshotAssessment& assessment,
         const Judgment::FrontObstacleResult& front_obstacle,
@@ -303,6 +363,9 @@ private:
     Command decideActiveAvoidanceStage(
         const SnapshotAssessment& assessment,
         const Judgment::FrontObstacleResult& front_obstacle,
+        DebugInfo debug);
+    Command decideSectorBufferDuringActiveStage(
+        const SnapshotAssessment& assessment,
         DebugInfo debug);
     bool tryContinueClearanceHoldStage(
         const SnapshotAssessment& assessment,
@@ -355,7 +418,6 @@ private:
     bool updateClearanceHoldAndCheckDone(
         const SensorSnapshot& snapshot,
         int speed_cm_s);
-    bool returnHeadingSettled(const SensorSnapshot& snapshot) const;
     double normalizedAvoidanceDistanceRatio(double front_nearest_m) const;
     double avoidanceHeadingCorrectionDeg(
         double yaw_deg,
@@ -373,6 +435,16 @@ private:
     double headingCorrectionDeg(
         const SensorSnapshot& snapshot,
         double max_correction_deg) const;
+    double lateralBalanceCorrectionDeg(
+        const SnapshotAssessment& assessment,
+        double max_correction_deg,
+        DebugInfo& debug) const;
+    double sideBalanceFromAssessment(const SnapshotAssessment& assessment) const;
+    bool frontClearEnoughForPathRecovery(const SensorSnapshot& snapshot) const;
+    bool tailClearanceComplete(const SensorSnapshot& snapshot) const;
+    double pathRecoveryCorrectionDeg(
+        const SnapshotAssessment& assessment,
+        DebugInfo& debug) const;
     double avoidanceSteeringSlewDegPerTick(double front_nearest_m) const;
     void resetSteeringSmoothing();
     double smoothSteeringAngleDeg(
@@ -427,4 +499,5 @@ private:
     ActiveAvoidanceState active_avoidance_state_;
     SteeringSmoothingState steering_smoothing_state_;
     TargetYawState target_yaw_state_;
+    PathReferenceState path_reference_state_;
 };

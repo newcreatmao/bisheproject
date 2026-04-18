@@ -214,7 +214,15 @@ void appendAutoAvoidCycleTraceCsv(const std::string& line) {
             << "whether_sent_start,whether_sent_angle,whether_sent_speed,whether_sent_stop,result,"
             << "reason_code,fallback_reason,direction,snapshot_fresh,front_nearest_m,front_angle_deg,"
             << "front_support_points,raw_zone,resolved_zone,spike_suppressed,zone_stabilized,"
-            << "zone_ambiguous,boundary_stop,emergency_stop,replan_triggered,used_imu_heading,"
+            << "zone_ambiguous,sector_buffer_active_continue,boundary_stop,emergency_stop,"
+            << "replan_triggered,return_heading_protected,return_heading_protect_ticks_remaining,"
+            << "lateral_balance_active,lateral_balance_correction_deg,path_reference_valid,"
+            << "reference_yaw_deg,reference_side_balance,reference_left_distance_m,"
+            << "reference_right_distance_m,path_reference_captured_ms,path_reference_captured_stage,"
+            << "path_reference_captured_this_cycle,path_reference_clear_reason,"
+            << "return_to_path_active,yaw_recovery_correction_deg,path_recovery_correction_deg,"
+            << "combined_return_correction_deg,tail_clearance_complete,tail_clearance_blocking,"
+            << "path_recovery_ready,path_recovery_settled,exit_to_idle_ready,used_imu_heading,"
             << "used_encoder_fallback,encoder_fallback_kind,target_yaw_valid,target_yaw_deg,"
             << "target_yaw_locked_ms,target_yaw_locked_by_stage,target_yaw_locked_this_cycle\n";
     }
@@ -2109,9 +2117,32 @@ void LogDashboardServer::runAutoAvoidControlLoop() {
             << csvBool(command.debug.spike_suppressed) << ","
             << csvBool(command.debug.zone_stabilized) << ","
             << csvBool(command.debug.zone_ambiguous) << ","
+            << csvBool(command.debug.sector_buffer_active_continue) << ","
             << csvBool(command.debug.boundary_stop) << ","
             << csvBool(command.debug.emergency_stop) << ","
             << csvBool(command.debug.replan_triggered) << ","
+            << csvBool(command.debug.return_heading_protected) << ","
+            << command.debug.return_heading_protect_ticks_remaining << ","
+            << csvBool(command.debug.lateral_balance_active) << ","
+            << csvNumber(command.debug.lateral_balance_correction_deg, 3) << ","
+            << csvBool(command.debug.path_reference_valid) << ","
+            << csvNumber(command.debug.reference_yaw_deg, 3) << ","
+            << csvNumber(command.debug.reference_side_balance, 3) << ","
+            << csvNumber(command.debug.reference_left_distance_m, 3) << ","
+            << csvNumber(command.debug.reference_right_distance_m, 3) << ","
+            << command.debug.path_reference_captured_ms << ","
+            << csvField(AutoAvoidController::avoidanceStageName(command.debug.path_reference_captured_stage)) << ","
+            << csvBool(command.debug.path_reference_captured_this_cycle) << ","
+            << csvField(AutoAvoidController::pathReferenceClearReasonName(command.debug.path_reference_clear_reason)) << ","
+            << csvBool(command.debug.return_to_path_active) << ","
+            << csvNumber(command.debug.yaw_recovery_correction_deg, 3) << ","
+            << csvNumber(command.debug.path_recovery_correction_deg, 3) << ","
+            << csvNumber(command.debug.combined_return_correction_deg, 3) << ","
+            << csvBool(command.debug.tail_clearance_complete) << ","
+            << csvBool(command.debug.tail_clearance_blocking) << ","
+            << csvBool(command.debug.path_recovery_ready) << ","
+            << csvBool(command.debug.path_recovery_settled) << ","
+            << csvBool(command.debug.exit_to_idle_ready) << ","
             << csvBool(command.debug.used_imu_heading) << ","
             << csvBool(command.debug.used_encoder_fallback) << ","
             << csvField(AutoAvoidController::encoderFallbackKindName(command.debug.encoder_fallback_kind)) << ","
@@ -2743,12 +2774,68 @@ std::string LogDashboardServer::stateJson() const {
                 auto_avoid_runtime_state.last_decision.debug.zone_stabilized) << ","
         << "\"zone_ambiguous\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.zone_ambiguous) << ","
+        << "\"sector_buffer_active_continue\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.sector_buffer_active_continue) << ","
         << "\"boundary_stop\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.boundary_stop) << ","
         << "\"emergency_stop\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.emergency_stop) << ","
         << "\"replan_triggered\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.replan_triggered) << ","
+        << "\"return_heading_protected\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.return_heading_protected) << ","
+        << "\"return_heading_protect_ticks_remaining\":" <<
+                auto_avoid_runtime_state.last_decision.debug.return_heading_protect_ticks_remaining << ","
+        << "\"lateral_balance_active\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.lateral_balance_active) << ","
+        << "\"lateral_balance_correction_deg\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.lateral_balance_correction_deg, 2) << ","
+        << "\"path_reference_valid\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.path_reference_valid) << ","
+        << "\"reference_yaw_deg\":" << (
+                auto_avoid_runtime_state.last_decision.debug.path_reference_valid ?
+                    numberJson(auto_avoid_runtime_state.last_decision.debug.reference_yaw_deg, 1) :
+                    "null") << ","
+        << "\"reference_side_balance\":" << (
+                auto_avoid_runtime_state.last_decision.debug.path_reference_valid ?
+                    numberJson(auto_avoid_runtime_state.last_decision.debug.reference_side_balance, 2) :
+                    "null") << ","
+        << "\"reference_left_distance_m\":" << (
+                auto_avoid_runtime_state.last_decision.debug.path_reference_valid ?
+                    numberJson(auto_avoid_runtime_state.last_decision.debug.reference_left_distance_m, 2) :
+                    "null") << ","
+        << "\"reference_right_distance_m\":" << (
+                auto_avoid_runtime_state.last_decision.debug.path_reference_valid ?
+                    numberJson(auto_avoid_runtime_state.last_decision.debug.reference_right_distance_m, 2) :
+                    "null") << ","
+        << "\"path_reference_captured_ms\":" <<
+                auto_avoid_runtime_state.last_decision.debug.path_reference_captured_ms << ","
+        << "\"path_reference_captured_stage\":\"" << jsonEscape(
+                AutoAvoidController::avoidanceStageName(
+                    auto_avoid_runtime_state.last_decision.debug.path_reference_captured_stage)) << "\","
+        << "\"path_reference_captured_this_cycle\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.path_reference_captured_this_cycle) << ","
+        << "\"path_reference_clear_reason\":\"" << jsonEscape(
+                AutoAvoidController::pathReferenceClearReasonName(
+                    auto_avoid_runtime_state.last_decision.debug.path_reference_clear_reason)) << "\","
+        << "\"return_to_path_active\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.return_to_path_active) << ","
+        << "\"yaw_recovery_correction_deg\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.yaw_recovery_correction_deg, 2) << ","
+        << "\"path_recovery_correction_deg\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.path_recovery_correction_deg, 2) << ","
+        << "\"combined_return_correction_deg\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.combined_return_correction_deg, 2) << ","
+        << "\"tail_clearance_complete\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.tail_clearance_complete) << ","
+        << "\"tail_clearance_blocking\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.tail_clearance_blocking) << ","
+        << "\"path_recovery_ready\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.path_recovery_ready) << ","
+        << "\"path_recovery_settled\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.path_recovery_settled) << ","
+        << "\"exit_to_idle_ready\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.exit_to_idle_ready) << ","
         << "\"used_imu_heading\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.used_imu_heading) << ","
         << "\"used_encoder_fallback\":" << boolJson(
