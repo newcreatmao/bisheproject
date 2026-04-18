@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "control/auto_avoid.hpp"
+#include "control/auto_avoid_input_builder.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -66,12 +67,7 @@ private:
     };
 
     struct LidarRuntimeState {
-        struct SectorRuntimeState {
-            bool valid = false;
-            double nearest_m = 0.0;
-            double nearest_angle_deg = 0.0;
-            int valid_points = 0;
-        };
+        using SectorRuntimeState = AutoAvoidInputBuilder::SectorState;
 
         std::uint64_t message_count = 0;
         std::chrono::steady_clock::time_point last_message_steady_{};
@@ -82,15 +78,10 @@ private:
         int valid_points = 0;
         SectorRuntimeState negative_front_sector;
         SectorRuntimeState front_sector;
+        SectorRuntimeState auto_avoid_front_sector;
         SectorRuntimeState positive_front_sector;
+        SectorRuntimeState avoidance_buffer_sector;
         std::string front_nearest_zone;
-    };
-
-    struct Stm32HealthState {
-        bool attempted = false;
-        bool success = false;
-        std::string text;
-        std::chrono::steady_clock::time_point last_check_steady_{};
     };
 
     struct VehicleCommandState {
@@ -100,23 +91,43 @@ private:
         int angle = 0;
     };
 
+    struct AutoAvoidCommandTrace {
+        bool sent_start = false;
+        bool sent_angle = false;
+        bool sent_speed = false;
+        bool sent_stop = false;
+        bool success = false;
+        std::string result = "not_sent";
+    };
+
+    struct AutoAvoidRuntimeState {
+        bool active = false;
+        bool has_decision = false;
+        std::int64_t last_control_cycle_id = 0;
+        bool snapshot_valid = false;
+        bool lidar_valid = false;
+        bool imu_valid = false;
+        AutoAvoidController::Command last_decision;
+        std::string last_apply_result = "not_sent";
+    };
+
     void configureRoutes();
     void startRosBridge();
     void stopRosBridge();
     void startStm32Bridge();
     void stopStm32Bridge();
-    void startHealthMonitor();
-    void stopHealthMonitor();
     void startRuntimeLogBridge();
     void stopRuntimeLogBridge();
     void startAutoAvoidControl();
     void stopAutoAvoidControl();
     void runAutoAvoidControlLoop();
     AutoAvoidController::SensorSnapshot autoAvoidSensorSnapshot() const;
-    void applyAutoAvoidCommand(
+    AutoAvoidCommandTrace applyAutoAvoidCommand(
         const AutoAvoidController::Command& command,
         AutoAvoidController::Command& last_command,
-        bool& has_last_command);
+        bool& has_last_command,
+        std::chrono::steady_clock::time_point& last_command_sent_steady,
+        std::int64_t control_cycle_id);
     void onDepthImage(const sensor_msgs::msg::Image::SharedPtr msg);
     void onLidarScan(const sensor_msgs::msg::LaserScan::SharedPtr msg);
     void onImu(const sensor_msgs::msg::Imu::SharedPtr msg);
@@ -125,6 +136,7 @@ private:
     std::string stateJson() const;
     std::string latestRgbYoloPayloadJson() const;
     std::string latestSavedRgbYoloPayloadJson() const;
+    bool stopModeSwitchReady(std::string& reason) const;
 
 private:
     std::string web_root_;
@@ -140,8 +152,6 @@ private:
     std::unique_ptr<ToStm> to_stm_;
     std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> executor_;
     std::thread spin_thread_;
-    std::atomic<bool> health_monitor_running_{false};
-    std::thread health_monitor_thread_;
     std::atomic<bool> runtime_log_bridge_running_{false};
     std::thread runtime_log_bridge_thread_;
     std::atomic<bool> auto_avoid_control_running_{false};
@@ -151,6 +161,7 @@ private:
     mutable std::mutex state_mutex_;
     mutable std::mutex stm32_mutex_;
     AutoAvoidController auto_avoid_controller_;
+    AutoAvoidInputBuilder auto_avoid_input_builder_;
     DepthRuntimeState depth_state_;
     LidarRuntimeState lidar_state_;
     ImuRuntimeState imu_state_;
@@ -159,6 +170,6 @@ private:
     std::chrono::steady_clock::time_point latest_rgb_yolo_received_steady_{};
     std::string active_workspace_mode_ = "STOP";
     bool manual_workspace_working_ = false;
-    Stm32HealthState stm32_health_state_;
     VehicleCommandState vehicle_command_state_;
+    AutoAvoidRuntimeState auto_avoid_runtime_state_;
 };

@@ -12,13 +12,6 @@ double normalizedBoundaryThreshold(double threshold_m) {
     return threshold_m;
 }
 
-double normalizedFrontPathThreshold(double threshold_m) {
-    if (!std::isfinite(threshold_m) || threshold_m <= 0.0) {
-        return Judgment::kFrontPathThresholdMeters;
-    }
-    return threshold_m;
-}
-
 double normalizedFrontObstacleThreshold(double threshold_m) {
     if (!std::isfinite(threshold_m) || threshold_m <= 0.0) {
         return Judgment::kFrontObstacleThresholdMeters;
@@ -63,16 +56,6 @@ bool Judgment::areVehicleBoundariesClear(
         isRightBoundaryClear(input.right_valid, input.right_nearest_m, threshold_m);
 }
 
-bool Judgment::isFrontPathClear(
-    bool front_valid,
-    double front_nearest_m,
-    double threshold_m) {
-    if (!isBoundaryReadingValid(front_valid, front_nearest_m)) {
-        return false;
-    }
-    return front_nearest_m > normalizedFrontPathThreshold(threshold_m);
-}
-
 bool Judgment::isFrontObstacleTooClose(
     bool front_valid,
     double front_nearest_m,
@@ -84,16 +67,25 @@ bool Judgment::isFrontObstacleTooClose(
 }
 
 Judgment::FrontObstacleZone Judgment::frontObstacleZoneFromAngle(double angle_deg) {
-    if (!std::isfinite(angle_deg) || angle_deg < -60.0 || angle_deg > 60.0) {
+    if (!std::isfinite(angle_deg) || angle_deg < -58.0 || angle_deg > 58.0) {
         return FrontObstacleZone::Unknown;
     }
-    if (angle_deg < -20.0) {
+    if (angle_deg <= -22.0) {
         return FrontObstacleZone::Left;
     }
-    if (angle_deg <= 20.0) {
+    if (angle_deg >= -18.0 && angle_deg <= 18.0) {
         return FrontObstacleZone::Center;
     }
-    return FrontObstacleZone::Right;
+    if (angle_deg >= 22.0) {
+        return FrontObstacleZone::Right;
+    }
+    return FrontObstacleZone::Unknown;
+}
+
+bool Judgment::isFrontObstacleZoneBufferAngle(double angle_deg) {
+    return std::isfinite(angle_deg) &&
+        ((angle_deg > -22.0 && angle_deg < -18.0) ||
+            (angle_deg > 18.0 && angle_deg < 22.0));
 }
 
 const char* Judgment::frontObstacleZoneName(FrontObstacleZone zone) {
@@ -150,7 +142,8 @@ Judgment::FrontObstacleResult Judgment::checkFrontObstacle(
     result.zone = frontObstacleZoneFromAngle(input.front_nearest_angle_deg);
     result.angle_deg = input.front_nearest_angle_deg;
     result.nearest_m = input.front_nearest_m;
-    if (result.zone == FrontObstacleZone::Unknown) {
+    if (result.zone == FrontObstacleZone::Unknown &&
+        !isFrontObstacleZoneBufferAngle(input.front_nearest_angle_deg)) {
         result.valid = false;
         result.too_close = false;
     }

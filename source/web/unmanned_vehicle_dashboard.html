@@ -831,6 +831,7 @@
                           <div class="row"><span class="label">RGB + YOLO</span><strong id="rgb-module-state">未启动</strong></div>
                           <div class="row"><span class="label">底盘通信</span><strong id="stm32-state">未启动</strong></div>
                         </div>
+                        <p class="muted" id="stop-mode-switch-status" style="margin:12px 0 0;">停止模式下检测各设备状态后才能切换到其他模式。</p>
                       </div>
                     </div>
 
@@ -854,19 +855,19 @@
                           </div>
                           <div class="lidar-sector-grid" aria-label="雷达扇区最近距离">
                             <div class="lidar-sector-card">
-                              <div class="sector-label">-90° 到 -60° 最近距离</div>
+                              <div class="sector-label">-90° 到 -62° 最近距离</div>
                               <strong id="lidar-sector-negative-distance">--</strong>
                               <div class="sector-note">角度：<span id="lidar-sector-negative-angle">--</span></div>
                               <div class="sector-note">负角前侧雷达区域</div>
                             </div>
                             <div class="lidar-sector-card">
-                              <div class="sector-label">-60° 到 60° 最近距离</div>
+                              <div class="sector-label">-58° 到 58° 最近距离</div>
                               <strong id="lidar-sector-front-distance">--</strong>
                               <div class="sector-note">角度：<span id="lidar-sector-front-angle">--</span></div>
                               <div class="sector-note">正前方雷达区域</div>
                             </div>
                             <div class="lidar-sector-card">
-                              <div class="sector-label">60° 到 90° 最近距离</div>
+                              <div class="sector-label">62° 到 90° 最近距离</div>
                               <strong id="lidar-sector-positive-distance">--</strong>
                               <div class="sector-note">角度：<span id="lidar-sector-positive-angle">--</span></div>
                               <div class="sector-note">正角前侧雷达区域</div>
@@ -1012,7 +1013,24 @@
 
 	    const workspaceState = {
 	      activeMode: 'STOP',
-	      switching: false
+	      switching: false,
+	      avoidanceTaskPending: false,
+	      modeInitialized: false,
+	      latestSystem: null,
+	      latestDevices: null
+	    };
+
+	    const lidarSectorDisplayState = {
+	      negative_front: { accepted: null, pendingCloser: null },
+	      front: { accepted: null, pendingCloser: null },
+	      positive_front: { accepted: null, pendingCloser: null }
+	    };
+
+	    const lidarSectorDisplayConfig = {
+	      closerJumpThresholdM: 0.18,
+	      closerConfirmTicks: 2,
+	      closerDistanceMatchToleranceM: 0.10,
+	      closerAngleMatchToleranceDeg: 8.0
 	    };
 
 	    const stm32DisplayConfig = {
@@ -1040,9 +1058,82 @@
 	        : fallback;
 	    }
 
+	    function deviceCode(device, fallback = 'not_started') {
+	      return device && typeof device.code === 'string' && device.code
+	        ? device.code
+	        : fallback;
+	    }
+
+	    function stopModeSwitchStatus(system, devices) {
+	      if (!system || !system.running) {
+	        return {
+	          ready: false,
+	          message: '停止模式下传感器栈未启动，无法切换到其他模式。'
+	        };
+	      }
+
+	      const requiredDevices = [
+	        ['gps', 'GPS'],
+	        ['imu', 'IMU'],
+	        ['lidar', '雷达'],
+	        ['depth_camera', '深度相机'],
+	        ['rgb_yolo', 'RGB + YOLO']
+	      ];
+	      const pending = requiredDevices
+	        .filter(([key]) => deviceCode(devices && devices[key]) !== 'started')
+	        .map(([, label]) => label);
+
+	      if (pending.length === 0) {
+	        return {
+	          ready: true,
+	          message: '停止模式检测完成，可以切换到其他模式。'
+	        };
+	      }
+
+	      return {
+	        ready: false,
+	        message: `停止模式检测中，以下设备未就绪：${pending.join('、')}`
+	      };
+	    }
+
+	    function renderStopModeSwitchState(system = {}, devices = {}) {
+	      const status = stopModeSwitchStatus(system, devices);
+	      const lockOtherModes = workspaceState.activeMode === 'STOP';
+
+	      document.querySelectorAll('#mode-toggle button').forEach(button => {
+	        if (button.dataset.mode !== 'stop') {
+	          button.disabled = lockOtherModes && !status.ready;
+	        }
+	      });
+
+	      if (lockOtherModes) {
+	        setText('stop-mode-switch-status', status.message);
+	        return;
+	      }
+
+	      setText('stop-mode-switch-status', '离开停止模式后，工作区不再被轮询结果强制覆盖。');
+	    }
+
+	    function renderAvoidanceTaskButtonState() {
+	      const enabled =
+	        workspaceState.activeMode === 'AVOIDANCE' &&
+	        !workspaceState.switching &&
+	        !workspaceState.avoidanceTaskPending;
+	      ['avoidance-task-start-btn', 'avoidance-task-stop-btn'].forEach(id => {
+	        const button = document.getElementById(id);
+	        if (button) {
+	          button.disabled = !enabled;
+	        }
+	      });
+	    }
+
 	    function initDashboardDefaults() {
 	      workspaceState.activeMode = 'STOP';
 	      workspaceState.switching = false;
+	      workspaceState.avoidanceTaskPending = false;
+	      workspaceState.modeInitialized = false;
+	      workspaceState.latestSystem = null;
+	      workspaceState.latestDevices = null;
 	      renderSystemStatus(false);
 	      setSystemMode('STOP');
 	      setText('chip-serial', '串口通信：未启动');
@@ -1073,6 +1164,8 @@
 	      setText('vehicle-speed-text', '--');
 	      setText('vehicle-angle-text', '--');
 	      setText('recognition-count', '0 个目标');
+	      setText('stop-mode-switch-status', '停止模式下检测各设备状态后才能切换到其他模式。');
+	      renderAvoidanceTaskButtonState();
 	    }
 
 	    function finiteNumber(value) {
@@ -1111,6 +1204,92 @@
 	      return sector && sector.valid && angle !== null
 	        ? `${angle.toFixed(1)}°`
 	        : '--';
+	    }
+
+	    function cloneLidarSector(sector) {
+	      return sector ? {
+	        valid: Boolean(sector.valid),
+	        nearest_m: finiteNumber(sector.nearest_m),
+	        nearest_angle_deg: finiteNumber(sector.nearest_angle_deg),
+	        valid_points: Number(sector.valid_points || 0)
+	      } : null;
+	    }
+
+	    function frontZoneFromAngle(angleDeg) {
+	      const angle = finiteNumber(angleDeg);
+	      if (angle === null) {
+	        return '';
+	      }
+	      if (angle <= -22) {
+	        return '左';
+	      }
+	      if (angle >= -18 && angle <= 18) {
+	        return '中';
+	      }
+	      if (angle >= 22) {
+	        return '右';
+	      }
+	      return '';
+	    }
+
+	    function stabilizedLidarSector(key, sector) {
+	      const slot = lidarSectorDisplayState[key];
+	      if (!slot) {
+	        return sector;
+	      }
+
+	      const candidate = cloneLidarSector(sector);
+	      const candidateDistance = finiteNumber(candidate && candidate.nearest_m);
+	      const candidateAngle = finiteNumber(candidate && candidate.nearest_angle_deg);
+	      if (!candidate || !candidate.valid || candidateDistance === null || candidateAngle === null) {
+	        slot.accepted = null;
+	        slot.pendingCloser = null;
+	        return candidate;
+	      }
+
+	      const accepted = slot.accepted;
+	      const acceptedDistance = finiteNumber(accepted && accepted.nearest_m);
+	      if (!accepted || !accepted.valid || acceptedDistance === null) {
+	        slot.accepted = candidate;
+	        slot.pendingCloser = null;
+	        return candidate;
+	      }
+
+	      const distanceDelta = candidateDistance - acceptedDistance;
+	      const isSuddenlyCloser =
+	        distanceDelta <= -lidarSectorDisplayConfig.closerJumpThresholdM;
+	      if (isSuddenlyCloser) {
+	        const pending = slot.pendingCloser;
+	        const matchesPending =
+	          pending &&
+	          Math.abs(candidateDistance - pending.nearest_m) <=
+	            lidarSectorDisplayConfig.closerDistanceMatchToleranceM &&
+	          Math.abs(candidateAngle - pending.nearest_angle_deg) <=
+	            lidarSectorDisplayConfig.closerAngleMatchToleranceDeg;
+	        if (matchesPending) {
+	          pending.ticks += 1;
+	          pending.nearest_m = candidateDistance;
+	          pending.nearest_angle_deg = candidateAngle;
+	          pending.valid_points = candidate.valid_points;
+	        } else {
+	          slot.pendingCloser = {
+	            valid: true,
+	            nearest_m: candidateDistance,
+	            nearest_angle_deg: candidateAngle,
+	            valid_points: candidate.valid_points,
+	            ticks: 1
+	          };
+	        }
+
+	        if ((slot.pendingCloser && slot.pendingCloser.ticks) <
+	            lidarSectorDisplayConfig.closerConfirmTicks) {
+	          return accepted;
+	        }
+	      }
+
+	      slot.accepted = candidate;
+	      slot.pendingCloser = null;
+	      return candidate;
 	    }
 
 	    function renderKeyDisplay(keyDisplay) {
@@ -1152,20 +1331,33 @@
 
 	    function renderLidarSectors(lidar) {
 	      const lidarSectors = lidar && lidar.sectors ? lidar.sectors : {};
-	      setText('lidar-sector-negative-distance', lidarSectorDistanceText(lidarSectors.negative_front));
-	      setText('lidar-sector-front-distance', lidarSectorDistanceText(lidarSectors.front));
-	      setText('lidar-sector-positive-distance', lidarSectorDistanceText(lidarSectors.positive_front));
-	      setText('lidar-sector-negative-angle', lidarSectorAngleText(lidarSectors.negative_front));
-	      setText('lidar-sector-front-angle', lidarSectorAngleText(lidarSectors.front));
-	      setText('lidar-sector-positive-angle', lidarSectorAngleText(lidarSectors.positive_front));
-	      setText('avoidance-nearest-zone', lidar && lidar.front_nearest_zone ? lidar.front_nearest_zone : '--');
+	      const negativeFront = stabilizedLidarSector('negative_front', lidarSectors.negative_front);
+	      const front = stabilizedLidarSector('front', lidarSectors.front);
+	      const positiveFront = stabilizedLidarSector('positive_front', lidarSectors.positive_front);
+	      const frontZone = frontZoneFromAngle(front && front.valid ? front.nearest_angle_deg : null);
+	      setText('lidar-sector-negative-distance', lidarSectorDistanceText(negativeFront));
+	      setText('lidar-sector-front-distance', lidarSectorDistanceText(front));
+	      setText('lidar-sector-positive-distance', lidarSectorDistanceText(positiveFront));
+	      setText('lidar-sector-negative-angle', lidarSectorAngleText(negativeFront));
+	      setText('lidar-sector-front-angle', lidarSectorAngleText(front));
+	      setText('lidar-sector-positive-angle', lidarSectorAngleText(positiveFront));
+	      setText(
+	        'avoidance-nearest-zone',
+	        frontZone || (lidar && lidar.front_nearest_zone ? lidar.front_nearest_zone : '--'));
 	    }
 
 	    function renderRuntimeState(state) {
 	      const system = state && state.system ? state.system : {};
 	      const devices = state && state.devices ? state.devices : {};
+	      workspaceState.latestSystem = system;
+	      workspaceState.latestDevices = devices;
 	      renderSystemStatus(Boolean(system.running));
-	      setSystemMode(system.mode || 'STOP');
+	      if (!workspaceState.modeInitialized) {
+	        workspaceState.modeInitialized = true;
+	        setSystemMode(system.mode || 'STOP');
+	      } else {
+	        renderStopModeSwitchState(system, devices);
+	      }
 	      setText('gps-state', deviceText(devices.gps, defaultDeviceTexts.gps));
 	      setText('imu-state', deviceText(devices.imu, defaultDeviceTexts.imu));
 	      setText('lidar-module-state', deviceText(devices.lidar, defaultDeviceTexts.lidar));
@@ -1575,10 +1767,10 @@
       });
     }
 
-    function setSystemMode(mode) {
-      const config = modeLabels[mode] || modeLabels.STOP;
-      workspaceState.activeMode = mode;
-      document.getElementById('mode-text').textContent = config.text;
+	    function setSystemMode(mode) {
+	      const config = modeLabels[mode] || modeLabels.STOP;
+	      workspaceState.activeMode = mode;
+	      document.getElementById('mode-text').textContent = config.text;
       document.getElementById('mode-badge').textContent = config.badge;
 
       document.querySelectorAll('#mode-toggle button').forEach(btn => {
@@ -1591,10 +1783,12 @@
         AUTO: 'auto-mode-panel',
         AVOIDANCE: 'avoidance-mode-panel',
         MANUAL: 'manual-mode-panel'
-      };
-      const target = document.getElementById(map[mode] || 'stop-mode-panel');
-      if (target) target.classList.add('active');
-    }
+	      };
+	      const target = document.getElementById(map[mode] || 'stop-mode-panel');
+	      if (target) target.classList.add('active');
+	      renderStopModeSwitchState(workspaceState.latestSystem || {}, workspaceState.latestDevices || {});
+	      renderAvoidanceTaskButtonState();
+	    }
 
     async function postJson(url, body = null) {
       const options = {
@@ -1624,22 +1818,29 @@
       return payload || {};
     }
 
-    function initModeToggle() {
-      document.querySelectorAll('#mode-toggle button').forEach(button => {
-        button.addEventListener('click', async () => {
-          const mode = button.dataset.mode.toUpperCase();
+	    function initModeToggle() {
+	      document.querySelectorAll('#mode-toggle button').forEach(button => {
+	        button.addEventListener('click', async () => {
+	          const mode = button.dataset.mode.toUpperCase();
           if (mode === workspaceState.activeMode || workspaceState.switching) {
             return;
           }
 
-          workspaceState.switching = true;
-          try {
-            const result = await postJson('/api/workspace/switch', { mode });
-            setSystemMode(result.mode || mode);
-          } finally {
-            workspaceState.switching = false;
-          }
-        });
+	          workspaceState.switching = true;
+	          renderAvoidanceTaskButtonState();
+	          try {
+	            const result = await postJson('/api/workspace/switch', { mode });
+	            setSystemMode(result.mode || mode);
+	          } catch (error) {
+	            if (workspaceState.activeMode === 'STOP') {
+	              setText('stop-mode-switch-status', error.message);
+	            }
+	            console.error('workspace switch failed', error);
+	          } finally {
+	            workspaceState.switching = false;
+	            renderAvoidanceTaskButtonState();
+	          }
+	        });
       });
     }
 
@@ -1734,7 +1935,17 @@
         }
 
         command.button.addEventListener('click', async () => {
-          command.button.disabled = true;
+          if (workspaceState.activeMode !== 'AVOIDANCE' || workspaceState.switching || workspaceState.avoidanceTaskPending) {
+            if (status) {
+              status.textContent = workspaceState.switching
+                ? '正在切换到避障工作区，请稍后再发送任务指令。'
+                : '请先进入避障工作区，再发送任务指令。';
+            }
+            return;
+          }
+
+          workspaceState.avoidanceTaskPending = true;
+          renderAvoidanceTaskButtonState();
           if (status) {
             status.textContent = `${command.pendingText}：${command.frame}`;
           }
@@ -1748,7 +1959,8 @@
               status.textContent = `避障任务指令发送失败：${error.message}`;
             }
           } finally {
-            command.button.disabled = false;
+            workspaceState.avoidanceTaskPending = false;
+            renderAvoidanceTaskButtonState();
           }
         });
       });
@@ -1842,6 +2054,8 @@
             systemBadge.textContent = 'ESTOP';
             systemBadge.classList.add('warn');
           }
+          workspaceState.modeInitialized = true;
+          setSystemMode('STOP');
         } catch (error) {
           console.error('emergency stop failed', error);
           const systemState = document.getElementById('system-state');

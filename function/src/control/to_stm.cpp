@@ -81,10 +81,6 @@ bool ToStm::sendEmergencyRelease() {
     return sendCommand(3, 5);
 }
 
-bool ToStm::probeStop() {
-    return sendCommand(3, 0, true);
-}
-
 bool ToStm::sendSpeedWaitOk(int value) {
     const int stm32_value = static_cast<int>(std::ceil(static_cast<double>(value) / 0.89));
     return sendCommandWaitOk(1, stm32_value);

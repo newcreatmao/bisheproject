@@ -12,7 +12,6 @@ public:
     bool sendSpeed(int value);
     bool sendAngle(int value);
     bool sendMode(int value);
-    bool probeStop();
 
     bool sendStop();
     bool sendStart();

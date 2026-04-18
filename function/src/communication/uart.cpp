@@ -1,12 +1,15 @@
 #include "communication/uart.hpp"
 #include "common/logger.hpp"
 
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <fcntl.h>
 #include <fstream>
 #include <iomanip>
@@ -21,6 +24,183 @@ namespace {
 
 constexpr int kCommandReplyTimeoutMs = 80;
 constexpr const char* kStm32StatusSnapshotPath = "/tmp/project_stm32_status.txt";
+constexpr const char* kUartAckTracePath = "/home/mao/use/project/Log/uart_ack_trace.csv";
+
+struct ParsedCommand {
+    std::string cmd_type = "unknown";
+    bool has_value = false;
+    int raw_value = 0;
+    bool has_speed_value = false;
+    int speed_value = 0;
+    bool has_steering_value = false;
+    int steering_value = 0;
+};
+
+std::string trimTrailingWhitespace(const std::string& value);
+
+thread_local UartTraceContext g_uart_trace_context;
+
+std::mutex& uartAckTraceMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::atomic<std::uint64_t>& uartAckTraceSequence() {
+    static std::atomic<std::uint64_t> seq{1};
+    return seq;
+}
+
+std::int64_t steadyClockNowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+std::int64_t steadyClockNs(const std::chrono::steady_clock::time_point& value) {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        value.time_since_epoch()).count();
+}
+
+std::string csvEscape(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 8);
+    escaped.push_back('"');
+    for (const char ch : value) {
+        if (ch == '"') {
+            escaped += "\"\"";
+        } else {
+            escaped.push_back(ch);
+        }
+    }
+    escaped.push_back('"');
+    return escaped;
+}
+
+std::string csvNumberOrEmpty(long long value, bool valid = true) {
+    if (!valid) {
+        return "";
+    }
+    return std::to_string(value);
+}
+
+std::string csvDoubleOrEmpty(double value, bool valid = true, int precision = 3) {
+    if (!valid || !std::isfinite(value)) {
+        return "";
+    }
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(precision) << value;
+    return out.str();
+}
+
+std::string compactReplyText(const std::string& value, std::size_t max_chars = 120) {
+    std::string compact = trimTrailingWhitespace(value);
+    for (char& ch : compact) {
+        if (ch == '\n' || ch == '\r') {
+            ch = ' ';
+        }
+    }
+    if (compact.size() > max_chars) {
+        compact.resize(max_chars);
+    }
+    return compact;
+}
+
+ParsedCommand parseCommandText(const std::string& cmd_text) {
+    ParsedCommand parsed;
+    if (cmd_text.size() < 5 || cmd_text[0] != '#' || cmd_text[1] != 'C') {
+        return parsed;
+    }
+
+    const std::size_t eq_pos = cmd_text.find('=');
+    const std::size_t end_pos = cmd_text.find('!');
+    if (eq_pos == std::string::npos || end_pos == std::string::npos || eq_pos + 1 >= end_pos) {
+        return parsed;
+    }
+
+    const std::string cmd_id = cmd_text.substr(2, eq_pos - 2);
+    try {
+        parsed.raw_value = std::stoi(cmd_text.substr(eq_pos + 1, end_pos - eq_pos - 1));
+        parsed.has_value = true;
+    } catch (...) {
+        parsed.has_value = false;
+    }
+
+    if (cmd_id == "1") {
+        parsed.cmd_type = "speed";
+        if (parsed.has_value) {
+            parsed.has_speed_value = true;
+            parsed.speed_value = parsed.raw_value;
+        }
+    } else if (cmd_id == "2") {
+        parsed.cmd_type = "angle";
+        if (parsed.has_value) {
+            parsed.has_steering_value = true;
+            parsed.steering_value = parsed.raw_value;
+        }
+    } else if (cmd_id == "3") {
+        parsed.cmd_type = "mode";
+    }
+    return parsed;
+}
+
+void appendUartAckTraceRow(
+    std::uint64_t seq_id,
+    const UartTraceContext& context,
+    const ParsedCommand& parsed_command,
+    const std::string& cmd_text,
+    std::int64_t tx_steady_ns,
+    bool has_rx_ok,
+    std::int64_t rx_ok_steady_ns,
+    double ack_wait_ms,
+    const std::string& result,
+    const std::string& extra) {
+    std::lock_guard<std::mutex> lock(uartAckTraceMutex());
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(kUartAckTracePath).parent_path(), ec);
+
+    const bool need_header =
+        !std::filesystem::exists(kUartAckTracePath, ec) ||
+        std::filesystem::file_size(kUartAckTracePath, ec) == 0;
+
+    std::ofstream output(kUartAckTracePath, std::ios::app);
+    if (!output.is_open()) {
+        return;
+    }
+
+    if (need_header) {
+        output
+            << "seq_id,control_cycle_id,source,thread_tag,cmd_type,cmd_text,"
+            << "tx_steady_ns,tx_steady_ms,rx_ok_steady_ns,rx_ok_steady_ms,ack_wait_ms,"
+            << "result,auto_avoid_state,speed_value,steering_value,extra\n";
+    }
+
+    const bool has_speed_value = context.has_speed_value || parsed_command.has_speed_value;
+    const int speed_value = context.has_speed_value ? context.speed_value : parsed_command.speed_value;
+    const bool has_steering_value =
+        context.has_steering_value || parsed_command.has_steering_value;
+    const int steering_value =
+        context.has_steering_value ? context.steering_value : parsed_command.steering_value;
+    const double tx_steady_ms = static_cast<double>(tx_steady_ns) / 1e6;
+    const double rx_ok_steady_ms = static_cast<double>(rx_ok_steady_ns) / 1e6;
+
+    output
+        << seq_id << ","
+        << context.control_cycle_id << ","
+        << csvEscape(context.source) << ","
+        << csvEscape(context.thread_tag) << ","
+        << csvEscape(parsed_command.cmd_type) << ","
+        << csvEscape(trimTrailingWhitespace(cmd_text)) << ","
+        << tx_steady_ns << ","
+        << csvDoubleOrEmpty(tx_steady_ms) << ","
+        << csvNumberOrEmpty(rx_ok_steady_ns, has_rx_ok) << ","
+        << csvDoubleOrEmpty(rx_ok_steady_ms, has_rx_ok) << ","
+        << csvDoubleOrEmpty(ack_wait_ms, has_rx_ok && ack_wait_ms >= 0.0) << ","
+        << csvEscape(result) << ","
+        << csvEscape(context.auto_avoid_state) << ","
+        << (has_speed_value ? std::to_string(speed_value) : std::string()) << ","
+        << (has_steering_value ? std::to_string(steering_value) : std::string()) << ","
+        << csvEscape(extra)
+        << "\n";
+}
 
 speed_t getBaudRate(int baud) {
     switch (baud) {
@@ -52,6 +232,15 @@ bool containsOkReply(const std::string& value) {
 }
 
 }  // namespace
+
+ScopedUartTraceContext::ScopedUartTraceContext(const UartTraceContext& context)
+    : previous_(g_uart_trace_context) {
+    g_uart_trace_context = context;
+}
+
+ScopedUartTraceContext::~ScopedUartTraceContext() {
+    g_uart_trace_context = previous_;
+}
 
 UART::UART(const std::string& device, int baudrate)
     : uart_fd_(-1),
@@ -127,7 +316,22 @@ bool UART::close_uart() {
 }
 
 bool UART::send_string(const std::string& str, bool quiet) {
+    const auto context = g_uart_trace_context;
+    const auto parsed_command = parseCommandText(str);
+    const std::uint64_t seq_id = uartAckTraceSequence().fetch_add(1);
+    const std::int64_t tx_steady_ns = steadyClockNowNs();
     if (uart_fd_ < 0) {
+        appendUartAckTraceRow(
+            seq_id,
+            context,
+            parsed_command,
+            str,
+            tx_steady_ns,
+            false,
+            0,
+            -1.0,
+            "uart_closed",
+            "send_string");
         if (!quiet) {
             log_warn("UART", "send fail: uart not open");
         }
@@ -135,55 +339,17 @@ bool UART::send_string(const std::string& str, bool quiet) {
     }
 
     if (str.empty()) {
-        if (!quiet) {
-            log_warn("UART", "send fail: empty string");
-        }
-        return false;
-    }
-
-    int previous_recv_count = 0;
-    {
-        std::lock_guard<std::mutex> recv_lock(recv_mutex_);
-        previous_recv_count = recv_counter_;
-    }
-
-    const ssize_t sent = write(uart_fd_, str.c_str(), str.size());
-    if (sent < 0) {
-        if (!quiet) {
-            log_error("UART", "send fail, errno=" + std::to_string(errno));
-        }
-        return false;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(status_mutex_);
-        last_sent_ = str;
-        last_update_time_ = nowIsoSeconds();
-        pushHistoryLocked(last_update_time_ + " TX " + trimTrailingWhitespace(str));
-        updateStatusSnapshotLocked();
-    }
-
-    if (!quiet) {
-        log_info("UART", "send: " + str);
-    }
-    if (!wait_for_reply_locked(previous_recv_count, kCommandReplyTimeoutMs)) {
-        if (!quiet) {
-            log_warn("UART", "send timeout waiting reply: " + str);
-        }
-        return false;
-    }
-    return true;
-}
-
-bool UART::send_string_wait_ok(const std::string& str, bool quiet, int timeout_ms) {
-    if (uart_fd_ < 0) {
-        if (!quiet) {
-            log_warn("UART", "send fail: uart not open");
-        }
-        return false;
-    }
-
-    if (str.empty()) {
+        appendUartAckTraceRow(
+            seq_id,
+            context,
+            parsed_command,
+            str,
+            tx_steady_ns,
+            false,
+            0,
+            -1.0,
+            "skipped",
+            "empty_command");
         if (!quiet) {
             log_warn("UART", "send fail: empty string");
         }
@@ -199,6 +365,17 @@ bool UART::send_string_wait_ok(const std::string& str, bool quiet, int timeout_m
 
     const ssize_t sent = write(uart_fd_, str.c_str(), str.size());
     if (sent < 0) {
+        appendUartAckTraceRow(
+            seq_id,
+            context,
+            parsed_command,
+            str,
+            tx_steady_ns,
+            false,
+            0,
+            -1.0,
+            "write_fail",
+            "errno=" + std::to_string(errno));
         if (!quiet) {
             log_error("UART", "send fail, errno=" + std::to_string(errno));
         }
@@ -216,7 +393,139 @@ bool UART::send_string_wait_ok(const std::string& str, bool quiet, int timeout_m
     if (!quiet) {
         log_info("UART", "send: " + str);
     }
-    if (!wait_for_ok_reply_locked(previous_recv_count, timeout_ms)) {
+    const WaitResult wait_result =
+        wait_for_reply_locked(previous_recv_count, kCommandReplyTimeoutMs);
+    const bool has_rx_ok = wait_result.ok;
+    const std::int64_t rx_ok_steady_ns =
+        has_rx_ok ? steadyClockNs(wait_result.reply_steady_) : 0;
+    const double ack_wait_ms =
+        has_rx_ok ? static_cast<double>(rx_ok_steady_ns - tx_steady_ns) / 1e6 : -1.0;
+    const std::string result =
+        wait_result.matched ?
+            (wait_result.ok ? "ok" : "unexpected_reply") :
+            (wait_result.received ? "unexpected_reply" : "timeout");
+    appendUartAckTraceRow(
+        seq_id,
+        context,
+        parsed_command,
+        str,
+        tx_steady_ns,
+        has_rx_ok,
+        rx_ok_steady_ns,
+        ack_wait_ms,
+        result,
+        "timeout_ms=" + std::to_string(kCommandReplyTimeoutMs) +
+            ";reply=" + compactReplyText(wait_result.reply_text));
+    if (!wait_result.matched) {
+        if (!quiet) {
+            log_warn("UART", "send timeout waiting reply: " + str);
+        }
+        return false;
+    }
+    return true;
+}
+
+bool UART::send_string_wait_ok(const std::string& str, bool quiet, int timeout_ms) {
+    const auto context = g_uart_trace_context;
+    const auto parsed_command = parseCommandText(str);
+    const std::uint64_t seq_id = uartAckTraceSequence().fetch_add(1);
+    const std::int64_t tx_steady_ns = steadyClockNowNs();
+    if (uart_fd_ < 0) {
+        appendUartAckTraceRow(
+            seq_id,
+            context,
+            parsed_command,
+            str,
+            tx_steady_ns,
+            false,
+            0,
+            -1.0,
+            "uart_closed",
+            "send_string_wait_ok");
+        if (!quiet) {
+            log_warn("UART", "send fail: uart not open");
+        }
+        return false;
+    }
+
+    if (str.empty()) {
+        appendUartAckTraceRow(
+            seq_id,
+            context,
+            parsed_command,
+            str,
+            tx_steady_ns,
+            false,
+            0,
+            -1.0,
+            "skipped",
+            "empty_command");
+        if (!quiet) {
+            log_warn("UART", "send fail: empty string");
+        }
+        return false;
+    }
+
+    int previous_recv_count = 0;
+    {
+        std::lock_guard<std::mutex> recv_lock(recv_mutex_);
+        previous_recv_count = recv_counter_;
+        reply_buffer_.clear();
+    }
+
+    const ssize_t sent = write(uart_fd_, str.c_str(), str.size());
+    if (sent < 0) {
+        appendUartAckTraceRow(
+            seq_id,
+            context,
+            parsed_command,
+            str,
+            tx_steady_ns,
+            false,
+            0,
+            -1.0,
+            "write_fail",
+            "errno=" + std::to_string(errno));
+        if (!quiet) {
+            log_error("UART", "send fail, errno=" + std::to_string(errno));
+        }
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(status_mutex_);
+        last_sent_ = str;
+        last_update_time_ = nowIsoSeconds();
+        pushHistoryLocked(last_update_time_ + " TX " + trimTrailingWhitespace(str));
+        updateStatusSnapshotLocked();
+    }
+
+    if (!quiet) {
+        log_info("UART", "send: " + str);
+    }
+    const WaitResult wait_result = wait_for_ok_reply_locked(previous_recv_count, timeout_ms);
+    const bool has_rx_ok = wait_result.ok;
+    const std::int64_t rx_ok_steady_ns =
+        has_rx_ok ? steadyClockNs(wait_result.reply_steady_) : 0;
+    const double ack_wait_ms =
+        has_rx_ok ? static_cast<double>(rx_ok_steady_ns - tx_steady_ns) / 1e6 : -1.0;
+    const std::string result =
+        wait_result.matched ?
+            "ok" :
+            (wait_result.received ? "unexpected_reply" : "timeout");
+    appendUartAckTraceRow(
+        seq_id,
+        context,
+        parsed_command,
+        str,
+        tx_steady_ns,
+        has_rx_ok,
+        rx_ok_steady_ns,
+        ack_wait_ms,
+        result,
+        "timeout_ms=" + std::to_string(timeout_ms) +
+            ";reply=" + compactReplyText(wait_result.reply_text));
+    if (!wait_result.matched) {
         if (!quiet) {
             log_warn("UART", "send timeout waiting ok reply: " + str);
         }
@@ -251,6 +560,7 @@ void UART::receive_loop() {
                     reply_buffer_.erase(0, reply_buffer_.size() - 256);
                 }
                 recv_counter_++;
+                last_receive_steady_ = std::chrono::steady_clock::now();
             }
             {
                 std::lock_guard<std::mutex> lock(status_mutex_);
@@ -320,22 +630,38 @@ void UART::updateStatusSnapshotLocked() const {
     }
 }
 
-bool UART::wait_for_ok_reply_locked(int previous_recv_count, int timeout_ms) {
+UART::WaitResult UART::wait_for_ok_reply_locked(int previous_recv_count, int timeout_ms) {
     std::unique_lock<std::mutex> lock(recv_mutex_);
-    return recv_cv_.wait_for(
+    WaitResult result;
+    result.matched = recv_cv_.wait_for(
         lock,
         std::chrono::milliseconds(timeout_ms),
         [this, previous_recv_count]() {
             return recv_counter_ > previous_recv_count && containsOkReply(reply_buffer_);
         });
+    result.received = recv_counter_ > previous_recv_count;
+    result.ok = result.received && containsOkReply(reply_buffer_);
+    if (result.received) {
+        result.reply_steady_ = last_receive_steady_;
+        result.reply_text = reply_buffer_;
+    }
+    return result;
 }
 
-bool UART::wait_for_reply_locked(int previous_recv_count, int timeout_ms) {
+UART::WaitResult UART::wait_for_reply_locked(int previous_recv_count, int timeout_ms) {
     std::unique_lock<std::mutex> lock(recv_mutex_);
-    return recv_cv_.wait_for(
+    WaitResult result;
+    result.matched = recv_cv_.wait_for(
         lock,
         std::chrono::milliseconds(timeout_ms),
         [this, previous_recv_count]() {
             return recv_counter_ > previous_recv_count;
         });
+    result.received = recv_counter_ > previous_recv_count;
+    result.ok = result.received && containsOkReply(reply_buffer_);
+    if (result.received) {
+        result.reply_steady_ = last_receive_steady_;
+        result.reply_text = reply_buffer_;
+    }
+    return result;
 }

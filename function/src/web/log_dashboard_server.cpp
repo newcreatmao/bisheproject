@@ -38,10 +38,11 @@ constexpr std::chrono::seconds kRgbYoloFreshWindow(5);
 constexpr std::chrono::seconds kSensorFreshWindow(3);
 constexpr std::chrono::seconds kSensorStartupGrace(10);
 constexpr std::chrono::seconds kStartupInfoWindow(18);
-constexpr std::chrono::seconds kStm32HealthCheckInterval(3);
-constexpr std::chrono::seconds kStm32HealthFreshWindow(6);
 constexpr std::chrono::milliseconds kRuntimeLogPollInterval(400);
+constexpr std::chrono::milliseconds kAutoAvoidCommandMinInterval(80);
 constexpr std::size_t kRuntimeBootstrapLineCount = 120;
+constexpr int kAutoAvoidSteeringResendThreshold = 12;
+constexpr int kAutoAvoidSpeedResendThreshold = 2;
 constexpr double kDepthNoObstacleDistanceMeters = 999.0;
 constexpr double kDepthMinValidMeters = 0.50;
 constexpr double kDepthNoDataFloorEpsilonMeters = 0.005;
@@ -55,15 +56,13 @@ constexpr double kDepthRoiLeftRatio = 0.20;
 constexpr double kDepthRoiRightRatio = 0.80;
 constexpr double kDepthLeftZoneEndRatio = 0.40;
 constexpr double kDepthCenterZoneEndRatio = 0.60;
-constexpr double kLidarMinUsefulRangeMeters = 0.25;
-constexpr double kLidarBlockedAngleMinDeg = 90.0;
-constexpr double kLidarBlockedAngleMaxDeg = 270.0;
 constexpr int kStm32StartSpeedRaw = 30;
 constexpr double kStm32ToWebSpeedScale = 0.89;
 constexpr int kStm32StartAngleCommand = 0;
 constexpr char kStackProcessNeedle[] = "project_stack.launch.py";
 constexpr char kStackLogModule[] = "STACK";
 constexpr char kStm32StatusSnapshotPath[] = "/tmp/project_stm32_status.txt";
+constexpr char kAutoAvoidCycleTracePath[] = "/home/mao/use/project/Log/auto_avoid_cycle_trace.csv";
 
 struct ComponentProcessState {
     bool running = false;
@@ -149,6 +148,78 @@ std::string trimWhitespace(const std::string& value) {
     }
     const auto end = value.find_last_not_of(" \t\r\n");
     return value.substr(begin, end - begin + 1);
+}
+
+std::string csvField(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 8);
+    escaped.push_back('"');
+    for (const char ch : value) {
+        if (ch == '"') {
+            escaped += "\"\"";
+        } else {
+            escaped.push_back(ch);
+        }
+    }
+    escaped.push_back('"');
+    return escaped;
+}
+
+std::string csvBool(bool value) {
+    return value ? "true" : "false";
+}
+
+std::string csvNumber(double value, int precision = 3) {
+    if (!std::isfinite(value)) {
+        return "";
+    }
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(precision) << value;
+    return out.str();
+}
+
+std::string csvIntOrEmpty(int value, bool valid = true) {
+    return valid ? std::to_string(value) : std::string();
+}
+
+std::int64_t steadyNs(const std::chrono::steady_clock::time_point& value) {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        value.time_since_epoch()).count();
+}
+
+double steadyMs(const std::chrono::steady_clock::time_point& value) {
+    return static_cast<double>(steadyNs(value)) / 1e6;
+}
+
+void appendAutoAvoidCycleTraceCsv(const std::string& line) {
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+
+    std::error_code ec;
+    fs::create_directories(fs::path(kAutoAvoidCycleTracePath).parent_path(), ec);
+    const bool need_header =
+        !fs::exists(kAutoAvoidCycleTracePath, ec) ||
+        fs::file_size(kAutoAvoidCycleTracePath, ec) == 0;
+
+    std::ofstream output(kAutoAvoidCycleTracePath, std::ios::app);
+    if (!output.is_open()) {
+        return;
+    }
+
+    if (need_header) {
+        output
+            << "control_cycle_id,cycle_start_ms,cycle_end_ms,cycle_duration_ms,"
+            << "snapshot_valid,lidar_valid,imu_valid,auto_avoid_state_before,auto_avoid_state_after,"
+            << "command_valid,command_mode,command_speed,command_steering,"
+            << "whether_sent_start,whether_sent_angle,whether_sent_speed,whether_sent_stop,result,"
+            << "reason_code,fallback_reason,direction,snapshot_fresh,front_nearest_m,front_angle_deg,"
+            << "front_support_points,raw_zone,resolved_zone,spike_suppressed,zone_stabilized,"
+            << "zone_ambiguous,boundary_stop,emergency_stop,replan_triggered,used_imu_heading,"
+            << "used_encoder_fallback,encoder_fallback_kind,target_yaw_valid,target_yaw_deg,"
+            << "target_yaw_locked_ms,target_yaw_locked_by_stage,target_yaw_locked_this_cycle\n";
+    }
+
+    output << line << "\n";
 }
 
 std::chrono::system_clock::time_point fileTimeToSystemClock(fs::file_time_type value) {
@@ -360,16 +431,6 @@ std::string deviceStateJson(const std::string& code, const std::string& text) {
     return out.str();
 }
 
-double normalizeAngleDeg(double angle) {
-    while (angle > 180.0) {
-        angle -= 360.0;
-    }
-    while (angle < -180.0) {
-        angle += 360.0;
-    }
-    return angle;
-}
-
 bool readDepth16Meters(
     const sensor_msgs::msg::Image& image,
     std::size_t byte_offset,
@@ -389,26 +450,6 @@ bool readDepth16Meters(
 
     depth_m = static_cast<double>(raw) / 1000.0;
     return true;
-}
-
-double wrap360Deg(double angle_deg) {
-    while (angle_deg < 0.0) {
-        angle_deg += 360.0;
-    }
-    while (angle_deg >= 360.0) {
-        angle_deg -= 360.0;
-    }
-    return angle_deg;
-}
-
-bool angleInWrappedRangeDeg(double angle_deg, double min_deg, double max_deg) {
-    const double angle = wrap360Deg(angle_deg);
-    const double min_angle = wrap360Deg(min_deg);
-    const double max_angle = wrap360Deg(max_deg);
-    if (min_angle <= max_angle) {
-        return angle >= min_angle && angle <= max_angle;
-    }
-    return angle >= min_angle || angle <= max_angle;
 }
 
 const char* depthZoneNameForX(int x, int width) {
@@ -910,7 +951,6 @@ LogDashboardServer::LogDashboardServer(std::string web_root)
     }
 
     startStm32Bridge();
-    startHealthMonitor();
     startRosBridge();
     startRuntimeLogBridge();
     configureRoutes();
@@ -934,8 +974,88 @@ void LogDashboardServer::stop() {
     stopAutoAvoidControl();
     stopRuntimeLogBridge();
     stopRosBridge();
-    stopHealthMonitor();
     stopStm32Bridge();
+}
+
+bool LogDashboardServer::stopModeSwitchReady(std::string& reason) const {
+    const fs::path runtime_dir = fs::path(runtimeLogsDir());
+    const ComponentProcessState stack_process =
+        componentProcessState(runtime_dir / "pids" / "project_stack.pid", kStackProcessNeedle);
+    if (!stack_process.running) {
+        reason = "停止模式下传感器栈未启动，无法切换工作区";
+        return false;
+    }
+
+    const auto now_steady = std::chrono::steady_clock::now();
+
+    DepthRuntimeState depth_state;
+    LidarRuntimeState lidar_state;
+    ImuRuntimeState imu_state;
+    GpsRuntimeState gps_state;
+    std::string live_rgb_yolo_payload;
+    std::chrono::steady_clock::time_point rgb_yolo_received_steady;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        depth_state = depth_state_;
+        lidar_state = lidar_state_;
+        imu_state = imu_state_;
+        gps_state = gps_state_;
+        live_rgb_yolo_payload = latest_rgb_yolo_payload_;
+        rgb_yolo_received_steady = latest_rgb_yolo_received_steady_;
+    }
+
+    std::vector<std::string> pending_devices;
+    const auto push_pending = [&](bool ready, const char* label) {
+        if (!ready) {
+            pending_devices.emplace_back(label);
+        }
+    };
+
+    const bool gps_ready =
+        gps_state.message_count > 0 &&
+        (now_steady - gps_state.last_message_steady_) <= kSensorFreshWindow;
+    const bool imu_ready =
+        imu_state.message_count > 0 &&
+        (now_steady - imu_state.last_message_steady_) <= kSensorFreshWindow;
+    const bool lidar_ready =
+        lidar_state.message_count > 0 &&
+        (now_steady - lidar_state.last_message_steady_) <= kSensorFreshWindow;
+    const bool depth_ready =
+        depth_state.message_count > 0 &&
+        (now_steady - depth_state.last_message_steady_) <= kSensorFreshWindow;
+
+    const bool rgb_payload_fresh =
+        !live_rgb_yolo_payload.empty() &&
+        rgb_yolo_received_steady != std::chrono::steady_clock::time_point{} &&
+        (now_steady - rgb_yolo_received_steady) <= kRgbYoloFreshWindow;
+    const bool rgb_ready =
+        rgb_payload_fresh &&
+        jsonRawFieldTrue(live_rgb_yolo_payload, "online") &&
+        jsonRawFieldTrue(live_rgb_yolo_payload, "camera_open") &&
+        jsonRawFieldTrue(live_rgb_yolo_payload, "model_ready") &&
+        extractJsonStringField(live_rgb_yolo_payload, "error").empty();
+
+    push_pending(gps_ready, "GPS");
+    push_pending(imu_ready, "IMU");
+    push_pending(lidar_ready, "雷达");
+    push_pending(depth_ready, "深度相机");
+    push_pending(rgb_ready, "RGB+YOLO");
+
+    if (pending_devices.empty()) {
+        reason.clear();
+        return true;
+    }
+
+    std::ostringstream out;
+    out << "停止模式检测未完成，以下设备未就绪：";
+    for (std::size_t i = 0; i < pending_devices.size(); ++i) {
+        if (i > 0) {
+            out << "、";
+        }
+        out << pending_devices[i];
+    }
+    reason = out.str();
+    return false;
 }
 
 void LogDashboardServer::configureRoutes() {
@@ -1006,10 +1126,10 @@ void LogDashboardServer::configureRoutes() {
             << "\"valid_points\":" << lidar_state.negative_front_sector.valid_points
             << "},"
             << "\"front\":{"
-            << "\"valid\":" << boolJson(lidar_key_valid && lidar_state.front_sector.valid) << ","
-            << "\"nearest_m\":" << (lidar_key_valid && lidar_state.front_sector.valid ? numberJson(lidar_state.front_sector.nearest_m, 2) : "null") << ","
-            << "\"nearest_angle_deg\":" << (lidar_key_valid && lidar_state.front_sector.valid ? numberJson(lidar_state.front_sector.nearest_angle_deg, 1) : "null") << ","
-            << "\"valid_points\":" << lidar_state.front_sector.valid_points
+            << "\"valid\":" << boolJson(lidar_key_valid && lidar_state.auto_avoid_front_sector.valid) << ","
+            << "\"nearest_m\":" << (lidar_key_valid && lidar_state.auto_avoid_front_sector.valid ? numberJson(lidar_state.auto_avoid_front_sector.nearest_m, 2) : "null") << ","
+            << "\"nearest_angle_deg\":" << (lidar_key_valid && lidar_state.auto_avoid_front_sector.valid ? numberJson(lidar_state.auto_avoid_front_sector.nearest_angle_deg, 1) : "null") << ","
+            << "\"valid_points\":" << lidar_state.auto_avoid_front_sector.valid_points
             << "},"
             << "\"positive_front\":{"
             << "\"valid\":" << boolJson(lidar_key_valid && lidar_state.positive_front_sector.valid) << ","
@@ -1068,6 +1188,10 @@ void LogDashboardServer::configureRoutes() {
             std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
             ready = static_cast<bool>(to_stm_);
             if (to_stm_) {
+                UartTraceContext trace_context;
+                trace_context.source = "emergency_stop";
+                trace_context.thread_tag = "api_handler";
+                ScopedUartTraceContext trace_scope(trace_context);
                 stm32_sent = to_stm_->sendEmergencyStop();
             }
         }
@@ -1112,6 +1236,10 @@ void LogDashboardServer::configureRoutes() {
             std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
             ready = static_cast<bool>(to_stm_);
             if (to_stm_) {
+                UartTraceContext trace_context;
+                trace_context.source = "emergency_release";
+                trace_context.thread_tag = "api_handler";
+                ScopedUartTraceContext trace_scope(trace_context);
                 stm32_sent = to_stm_->sendEmergencyRelease();
             }
         }
@@ -1166,6 +1294,18 @@ void LogDashboardServer::configureRoutes() {
             return;
         }
 
+        if (current_mode == "STOP" && target_mode != "STOP") {
+            std::string reason;
+            if (!stopModeSwitchReady(reason)) {
+                setJson(
+                    res,
+                    409,
+                    std::string("{\"ok\":false,\"status\":\"stop_mode_not_ready\",\"message\":\"") +
+                        jsonEscape(reason) + "\"}");
+                return;
+            }
+        }
+
         if (current_mode == "MANUAL" && manual_working && target_mode != "MANUAL") {
             bool ready = false;
             bool stop_ok = false;
@@ -1173,6 +1313,10 @@ void LogDashboardServer::configureRoutes() {
                 std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
                 ready = static_cast<bool>(to_stm_);
                 if (ready) {
+                    UartTraceContext trace_context;
+                    trace_context.source = "workspace_switch";
+                    trace_context.thread_tag = "api_handler";
+                    ScopedUartTraceContext trace_scope(trace_context);
                     stop_ok = to_stm_->sendStop();
                 }
             }
@@ -1197,33 +1341,11 @@ void LogDashboardServer::configureRoutes() {
         if (current_mode == "AVOIDANCE" &&
             target_mode != "AVOIDANCE" &&
             (auto_avoid_control_running_.load() || auto_avoid_stm32_drive_enabled_.load())) {
-            stopAutoAvoidControl();
-            auto_avoid_stm32_drive_enabled_.store(false);
-            bool ready = false;
-            bool stop_ok = false;
-            {
-                std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
-                ready = static_cast<bool>(to_stm_);
-                if (ready) {
-                    stop_ok = to_stm_->sendStop();
-                }
-            }
-
-            if (!ready) {
-                setJson(
-                    res,
-                    503,
-                    "{\"ok\":false,\"message\":\"切换前无法停止避障工作区，STM32 未初始化\",\"status\":\"failed_not_ready\"}");
-                return;
-            }
-
-            if (!stop_ok) {
-                setJson(
-                    res,
-                    500,
-                    stm32DirectResultJson("avoidance_stop", "#C3=0!", false, "failed_send", "STM32 发送失败"));
-                return;
-            }
+            setJson(
+                res,
+                409,
+                "{\"ok\":false,\"message\":\"避障任务运行中，请先停止任务再切换工作区\",\"status\":\"avoidance_task_running\"}");
+            return;
         }
 
         {
@@ -1284,6 +1406,10 @@ void LogDashboardServer::configureRoutes() {
             {
                 std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
                 if (to_stm_) {
+                    UartTraceContext trace_context;
+                    trace_context.source = "manual_api";
+                    trace_context.thread_tag = "api_handler";
+                    ScopedUartTraceContext trace_scope(trace_context);
                     ok = (to_stm_.get()->*fn)();
                 }
             }
@@ -1379,6 +1505,17 @@ void LogDashboardServer::configureRoutes() {
             {
                 std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
                 if (to_stm_) {
+                    UartTraceContext trace_context;
+                    trace_context.source = "manual_api";
+                    trace_context.thread_tag = "api_handler";
+                    if (command == "speed") {
+                        trace_context.has_speed_value = true;
+                        trace_context.speed_value = value;
+                    } else if (command == "angle") {
+                        trace_context.has_steering_value = true;
+                        trace_context.steering_value = value;
+                    }
+                    ScopedUartTraceContext trace_scope(trace_context);
                     ok = (to_stm_.get()->*fn)(value);
                 }
             }
@@ -1443,6 +1580,10 @@ void LogDashboardServer::configureRoutes() {
             {
                 std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
                 if (to_stm_) {
+                    UartTraceContext trace_context;
+                    trace_context.source = command;
+                    trace_context.thread_tag = "api_handler";
+                    ScopedUartTraceContext trace_scope(trace_context);
                     ok = (to_stm_.get()->*fn)();
                 }
             }
@@ -1630,62 +1771,147 @@ AutoAvoidController::SensorSnapshot LogDashboardServer::autoAvoidSensorSnapshot(
         imu_state.message_count > 0 &&
         (now - imu_state.last_message_steady_) <= kSensorFreshWindow;
 
-    const auto sector_snapshot =
-        [lidar_fresh](const LidarRuntimeState::SectorRuntimeState& sector) {
-            AutoAvoidController::SectorSample sample;
-            sample.valid = lidar_fresh && sector.valid;
-            sample.nearest_m = sector.nearest_m;
-            sample.nearest_angle_deg = sector.nearest_angle_deg;
-            sample.valid_points = sector.valid_points;
-            return sample;
-        };
-
-    AutoAvoidController::SensorSnapshot snapshot;
-    snapshot.lidar_valid = lidar_fresh;
-    snapshot.negative_front = sector_snapshot(lidar_state.negative_front_sector);
-    snapshot.front = sector_snapshot(lidar_state.front_sector);
-    snapshot.positive_front = sector_snapshot(lidar_state.positive_front_sector);
-    snapshot.imu_valid = imu_fresh;
-    snapshot.yaw_deg = imu_state.yaw_deg;
-    return snapshot;
+    AutoAvoidInputBuilder::LidarInputFrame lidar_frame;
+    lidar_frame.valid = lidar_state.valid;
+    lidar_frame.obstacle_detected = lidar_state.obstacle_detected;
+    lidar_frame.nearest_m = lidar_state.nearest_m;
+    lidar_frame.nearest_angle_deg = lidar_state.nearest_angle_deg;
+    lidar_frame.valid_points = lidar_state.valid_points;
+    lidar_frame.negative_front_sector = lidar_state.negative_front_sector;
+    lidar_frame.front_sector = lidar_state.front_sector;
+    lidar_frame.auto_avoid_front_sector = lidar_state.auto_avoid_front_sector;
+    lidar_frame.positive_front_sector = lidar_state.positive_front_sector;
+    lidar_frame.avoidance_buffer_sector = lidar_state.avoidance_buffer_sector;
+    lidar_frame.front_nearest_zone = lidar_state.front_nearest_zone;
+    return auto_avoid_input_builder_.buildSnapshot(
+        lidar_frame,
+        lidar_fresh,
+        imu_fresh,
+        imu_state.yaw_deg,
+        steadyMs(now));
 }
 
-void LogDashboardServer::applyAutoAvoidCommand(
+LogDashboardServer::AutoAvoidCommandTrace LogDashboardServer::applyAutoAvoidCommand(
     const AutoAvoidController::Command& command,
     AutoAvoidController::Command& last_command,
-    bool& has_last_command) {
+    bool& has_last_command,
+    std::chrono::steady_clock::time_point& last_command_sent_steady,
+    std::int64_t control_cycle_id) {
+    AutoAvoidCommandTrace trace;
+    const auto now = std::chrono::steady_clock::now();
+    AutoAvoidController::Command effective_command = command;
+    if (!effective_command.valid) {
+        effective_command.valid = true;
+        effective_command.safety_fallback = true;
+        effective_command.mode = AutoAvoidController::MotionMode::Stop;
+        effective_command.state = auto_avoid_controller_.currentAvoidanceStage();
+        effective_command.direction = AutoAvoidController::TurnDirection::Stop;
+        effective_command.speed_cm_s = 0;
+        effective_command.steering_encoder = 0;
+        effective_command.steering_angle_deg = 0.0;
+        effective_command.reason_code =
+            AutoAvoidController::DecisionReason::InvalidDecision;
+        effective_command.fallback_reason =
+            AutoAvoidController::FallbackReason::InvalidDecision;
+        effective_command.debug.state = effective_command.state;
+        effective_command.debug.direction = effective_command.direction;
+        effective_command.debug.reason_code = effective_command.reason_code;
+        effective_command.debug.fallback_reason = effective_command.fallback_reason;
+        effective_command.debug.safety_fallback = true;
+        if (effective_command.debug_text.empty()) {
+            effective_command.debug_text = "invalid decision -> safety fallback";
+        }
+        trace.result = "invalid_command_safe_stop";
+    }
+
+    const bool mode_changed =
+        has_last_command && last_command.mode != effective_command.mode;
+    const bool direction_changed =
+        has_last_command && last_command.direction != effective_command.direction;
+    const int speed_delta =
+        has_last_command ? std::abs(last_command.speed_cm_s - effective_command.speed_cm_s) : 0;
+    const int steering_delta =
+        has_last_command ?
+            std::abs(last_command.steering_encoder - effective_command.steering_encoder) :
+            0;
+    const bool speed_changed =
+        !has_last_command || speed_delta >= kAutoAvoidSpeedResendThreshold;
+    const bool steering_changed =
+        !has_last_command || steering_delta >= kAutoAvoidSteeringResendThreshold;
     const bool command_changed =
         !has_last_command ||
-        last_command.mode != command.mode ||
-        last_command.direction != command.direction ||
-        last_command.speed_cm_s != command.speed_cm_s ||
-        last_command.steering_encoder != command.steering_encoder;
-
+        mode_changed ||
+        direction_changed ||
+        speed_changed ||
+        steering_changed;
     if (!command_changed) {
-        return;
+        trace.result = "skipped_no_change";
+        return trace;
     }
+
+    const bool steering_only_update =
+        has_last_command &&
+        !mode_changed &&
+        !direction_changed &&
+        !speed_changed &&
+        steering_changed;
+    if (steering_only_update &&
+        last_command_sent_steady.time_since_epoch().count() > 0 &&
+        (now - last_command_sent_steady) < kAutoAvoidCommandMinInterval) {
+        trace.result = "skipped_rate_limited";
+        return trace;
+    }
+
+    const std::string auto_avoid_state =
+        AutoAvoidController::avoidanceStageName(auto_avoid_controller_.currentAvoidanceStage());
 
     log_info(
         kLogModule,
         std::string("auto avoid command: mode=") +
-            AutoAvoidController::motionModeName(command.mode) +
-            ", direction=" + AutoAvoidController::turnDirectionName(command.direction) +
-            ", speed=" + std::to_string(command.speed_cm_s) +
-            ", angle_encoder=" + std::to_string(command.steering_encoder) +
-            ", reason=" + command.reason);
+            AutoAvoidController::motionModeName(effective_command.mode) +
+            ", direction=" + AutoAvoidController::turnDirectionName(effective_command.direction) +
+            ", speed=" + std::to_string(effective_command.speed_cm_s) +
+            ", angle_encoder=" + std::to_string(effective_command.steering_encoder) +
+            ", reason_code=" +
+            AutoAvoidController::decisionReasonName(effective_command.reason_code) +
+            ", fallback=" +
+            AutoAvoidController::fallbackReasonName(effective_command.fallback_reason) +
+            ", reason=" + effective_command.debug_text);
 
-    if (command.mode == AutoAvoidController::MotionMode::Stop) {
-        bool ok = false;
+    if (effective_command.mode == AutoAvoidController::MotionMode::Stop) {
+        bool stop_ok = false;
+        bool angle_ok = false;
         {
             std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
             if (to_stm_) {
-                ok = to_stm_->sendStopWaitOk();
+                UartTraceContext angle_context;
+                angle_context.control_cycle_id = control_cycle_id;
+                angle_context.source = "auto_avoid";
+                angle_context.thread_tag = "auto_avoid_control_thread";
+                angle_context.auto_avoid_state = auto_avoid_state;
+                angle_context.has_steering_value = true;
+                angle_context.steering_value = 0;
+                ScopedUartTraceContext angle_scope(angle_context);
+                trace.sent_angle = true;
+                angle_ok = to_stm_->sendAngleWaitOk(0);
+                UartTraceContext stop_context;
+                stop_context.control_cycle_id = control_cycle_id;
+                stop_context.source = "auto_avoid";
+                stop_context.thread_tag = "auto_avoid_control_thread";
+                stop_context.auto_avoid_state = auto_avoid_state;
+                ScopedUartTraceContext stop_scope(stop_context);
+                trace.sent_stop = true;
+                stop_ok = to_stm_->sendStopWaitOk();
             }
         }
 
-        if (!ok) {
+        if (!stop_ok) {
             log_warn(kLogModule, "auto avoid stop command failed");
-            return;
+            trace.result = "failed_stop";
+            return trace;
+        }
+        if (!angle_ok) {
+            log_warn(kLogModule, "auto avoid stop recenter failed before stop");
         }
 
         auto_avoid_stm32_drive_enabled_.store(false);
@@ -1693,10 +1919,15 @@ void LogDashboardServer::applyAutoAvoidCommand(
             std::lock_guard<std::mutex> lock(state_mutex_);
             vehicle_command_state_.has_speed = true;
             vehicle_command_state_.speed = 0;
+            vehicle_command_state_.has_angle = true;
+            vehicle_command_state_.angle = 0;
         }
-        last_command = command;
+        last_command_sent_steady = now;
+        last_command = effective_command;
         has_last_command = true;
-        return;
+        trace.success = true;
+        trace.result = angle_ok ? "ok" : "ok_stop_recenter_failed";
+        return trace;
     }
 
     bool start_ok = true;
@@ -1706,10 +1937,18 @@ void LogDashboardServer::applyAutoAvoidCommand(
         std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
         if (!to_stm_) {
             log_warn(kLogModule, "auto avoid command skipped: STM32 not ready");
-            return;
+            trace.result = "skipped_stm32_not_ready";
+            return trace;
         }
 
         if (!auto_avoid_stm32_drive_enabled_.load()) {
+            UartTraceContext start_context;
+            start_context.control_cycle_id = control_cycle_id;
+            start_context.source = "auto_avoid";
+            start_context.thread_tag = "auto_avoid_control_thread";
+            start_context.auto_avoid_state = auto_avoid_state;
+            ScopedUartTraceContext start_scope(start_context);
+            trace.sent_start = true;
             start_ok = to_stm_->sendStartWaitOk();
             if (start_ok) {
                 auto_avoid_stm32_drive_enabled_.store(true);
@@ -1717,25 +1956,46 @@ void LogDashboardServer::applyAutoAvoidCommand(
         }
 
         if (start_ok) {
-            angle_ok = to_stm_->sendAngleWaitOk(command.steering_encoder);
-            speed_ok = to_stm_->sendSpeedWaitOk(command.speed_cm_s);
+            UartTraceContext angle_context;
+            angle_context.control_cycle_id = control_cycle_id;
+            angle_context.source = "auto_avoid";
+            angle_context.thread_tag = "auto_avoid_control_thread";
+            angle_context.auto_avoid_state = auto_avoid_state;
+            angle_context.has_speed_value = true;
+            angle_context.speed_value = effective_command.speed_cm_s;
+            angle_context.has_steering_value = true;
+            angle_context.steering_value = effective_command.steering_encoder;
+            ScopedUartTraceContext angle_scope(angle_context);
+            trace.sent_angle = true;
+            angle_ok = to_stm_->sendAngleWaitOk(effective_command.steering_encoder);
+            UartTraceContext speed_context = angle_context;
+            ScopedUartTraceContext speed_scope(speed_context);
+            trace.sent_speed = true;
+            speed_ok = to_stm_->sendSpeedWaitOk(effective_command.speed_cm_s);
         }
     }
 
     if (!start_ok || !angle_ok || !speed_ok) {
         log_warn(kLogModule, "auto avoid drive command failed");
-        return;
+        trace.result =
+            !start_ok ? "failed_start" :
+            (!angle_ok ? "failed_angle" : "failed_speed");
+        return trace;
     }
 
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         vehicle_command_state_.has_speed = true;
-        vehicle_command_state_.speed = command.speed_cm_s;
+        vehicle_command_state_.speed = effective_command.speed_cm_s;
         vehicle_command_state_.has_angle = true;
-        vehicle_command_state_.angle = command.steering_encoder;
+        vehicle_command_state_.angle = effective_command.steering_encoder;
     }
-    last_command = command;
+    last_command_sent_steady = now;
+    last_command = effective_command;
     has_last_command = true;
+    trace.success = true;
+    trace.result = "ok";
+    return trace;
 }
 
 void LogDashboardServer::runAutoAvoidControlLoop() {
@@ -1743,12 +2003,14 @@ void LogDashboardServer::runAutoAvoidControlLoop() {
 
     AutoAvoidController::Command last_command;
     bool has_last_command = false;
-    bool target_yaw_valid = false;
-    double target_yaw_deg = 0.0;
+    std::chrono::steady_clock::time_point last_command_sent_steady{};
     auto next_tick = std::chrono::steady_clock::now();
+    std::int64_t control_cycle_id = 0;
 
     while (auto_avoid_control_running_.load()) {
+        const auto cycle_start = std::chrono::steady_clock::now();
         next_tick += 100ms;
+        ++control_cycle_id;
 
         std::string active_mode;
         {
@@ -1756,84 +2018,114 @@ void LogDashboardServer::runAutoAvoidControlLoop() {
             active_mode = active_workspace_mode_;
         }
 
+        const std::string auto_avoid_state_before =
+            AutoAvoidController::avoidanceStageName(auto_avoid_controller_.currentAvoidanceStage());
+        bool snapshot_valid = false;
+        bool lidar_valid = false;
+        bool imu_valid = false;
+        AutoAvoidController::Command command;
+        AutoAvoidCommandTrace command_trace;
+
         if (active_mode == "AVOIDANCE") {
             auto snapshot = autoAvoidSensorSnapshot();
-            if (!target_yaw_valid && snapshot.imu_valid) {
-                target_yaw_valid = true;
-                target_yaw_deg = snapshot.yaw_deg;
-                log_info(
-                    kLogModule,
-                    "auto avoid target yaw locked: " + std::to_string(target_yaw_deg));
+            lidar_valid = snapshot.lidar_valid;
+            imu_valid = snapshot.imu_valid;
+            snapshot_valid =
+                snapshot.lidar_valid &&
+                snapshot.front.valid &&
+                snapshot.negative_front.valid &&
+                snapshot.positive_front.valid;
+            command = auto_avoid_controller_.decide(snapshot);
+            command_trace = applyAutoAvoidCommand(
+                command,
+                last_command,
+                has_last_command,
+                last_command_sent_steady,
+                control_cycle_id);
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                auto_avoid_runtime_state_.active = true;
+                auto_avoid_runtime_state_.has_decision = true;
+                auto_avoid_runtime_state_.last_control_cycle_id = control_cycle_id;
+                auto_avoid_runtime_state_.snapshot_valid = snapshot_valid;
+                auto_avoid_runtime_state_.lidar_valid = lidar_valid;
+                auto_avoid_runtime_state_.imu_valid = imu_valid;
+                auto_avoid_runtime_state_.last_decision = command;
+                auto_avoid_runtime_state_.last_apply_result = command_trace.result;
             }
-            snapshot.target_yaw_valid = target_yaw_valid;
-            snapshot.target_yaw_deg = target_yaw_deg;
-            const auto command = auto_avoid_controller_.decide(snapshot);
-            applyAutoAvoidCommand(command, last_command, has_last_command);
         } else {
-            target_yaw_valid = false;
+            has_last_command = false;
+            last_command = AutoAvoidController::Command{};
+            last_command_sent_steady = std::chrono::steady_clock::time_point{};
             auto_avoid_controller_.reset();
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                auto_avoid_runtime_state_.active = false;
+                auto_avoid_runtime_state_.has_decision = false;
+                auto_avoid_runtime_state_.last_control_cycle_id = control_cycle_id;
+                auto_avoid_runtime_state_.snapshot_valid = false;
+                auto_avoid_runtime_state_.lidar_valid = false;
+                auto_avoid_runtime_state_.imu_valid = false;
+                auto_avoid_runtime_state_.last_decision = AutoAvoidController::Command{};
+                auto_avoid_runtime_state_.last_apply_result = "inactive";
+            }
         }
+
+        const std::string auto_avoid_state_after =
+            AutoAvoidController::avoidanceStageName(auto_avoid_controller_.currentAvoidanceStage());
+        const auto cycle_end = std::chrono::steady_clock::now();
+        std::ostringstream cycle_row;
+        cycle_row
+            << control_cycle_id << ","
+            << csvNumber(steadyMs(cycle_start)) << ","
+            << csvNumber(steadyMs(cycle_end)) << ","
+            << csvNumber(
+                   std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(
+                       cycle_end - cycle_start)
+                       .count()) << ","
+            << csvBool(snapshot_valid) << ","
+            << csvBool(lidar_valid) << ","
+            << csvBool(imu_valid) << ","
+            << csvField(auto_avoid_state_before) << ","
+            << csvField(auto_avoid_state_after) << ","
+            << csvBool(command.valid) << ","
+            << csvField(command.valid ? AutoAvoidController::motionModeName(command.mode) : "") << ","
+            << csvIntOrEmpty(command.speed_cm_s, command.valid) << ","
+            << csvIntOrEmpty(command.steering_encoder, command.valid) << ","
+            << csvBool(command_trace.sent_start) << ","
+            << csvBool(command_trace.sent_angle) << ","
+            << csvBool(command_trace.sent_speed) << ","
+            << csvBool(command_trace.sent_stop) << ","
+            << csvField(command_trace.result) << ","
+            << csvField(AutoAvoidController::decisionReasonName(command.reason_code)) << ","
+            << csvField(AutoAvoidController::fallbackReasonName(command.fallback_reason)) << ","
+            << csvField(AutoAvoidController::turnDirectionName(command.direction)) << ","
+            << csvBool(command.debug.snapshot_fresh) << ","
+            << csvNumber(command.debug.front_nearest_m, 3) << ","
+            << csvNumber(command.debug.front_angle_deg, 3) << ","
+            << csvIntOrEmpty(command.debug.front_support_points, command.debug.front_nearest_valid) << ","
+            << csvField(Judgment::frontObstacleZoneName(command.debug.raw_zone)) << ","
+            << csvField(Judgment::frontObstacleZoneName(command.debug.resolved_zone)) << ","
+            << csvBool(command.debug.spike_suppressed) << ","
+            << csvBool(command.debug.zone_stabilized) << ","
+            << csvBool(command.debug.zone_ambiguous) << ","
+            << csvBool(command.debug.boundary_stop) << ","
+            << csvBool(command.debug.emergency_stop) << ","
+            << csvBool(command.debug.replan_triggered) << ","
+            << csvBool(command.debug.used_imu_heading) << ","
+            << csvBool(command.debug.used_encoder_fallback) << ","
+            << csvField(AutoAvoidController::encoderFallbackKindName(command.debug.encoder_fallback_kind)) << ","
+            << csvBool(command.debug.target_yaw_valid) << ","
+            << csvNumber(command.debug.target_yaw_deg, 3) << ","
+            << command.debug.target_yaw_locked_ms << ","
+            << csvField(AutoAvoidController::avoidanceStageName(command.debug.target_yaw_locked_by_stage)) << ","
+            << csvBool(command.debug.target_yaw_locked_this_cycle);
+        appendAutoAvoidCycleTraceCsv(cycle_row.str());
 
         std::this_thread::sleep_until(next_tick);
         if (std::chrono::steady_clock::now() > next_tick + 200ms) {
             next_tick = std::chrono::steady_clock::now();
         }
-    }
-}
-
-void LogDashboardServer::startHealthMonitor() {
-    if (health_monitor_running_.exchange(true)) {
-        return;
-    }
-
-    health_monitor_thread_ = std::thread([this]() {
-        while (health_monitor_running_.load()) {
-            std::this_thread::sleep_for(kStm32HealthCheckInterval);
-            if (!health_monitor_running_.load()) {
-                break;
-            }
-
-            std::string active_mode;
-            {
-                std::lock_guard<std::mutex> lock(state_mutex_);
-                active_mode = active_workspace_mode_;
-            }
-
-            if (active_mode != "STOP") {
-                continue;
-            }
-            if (stm32_emergency_active_.load()) {
-                continue;
-            }
-
-            bool ready = false;
-            bool ok = false;
-            {
-                std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
-                ready = static_cast<bool>(to_stm_);
-                if (ready) {
-                    ok = to_stm_->probeStop();
-                }
-            }
-            if (!ready) {
-                continue;
-            }
-
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            stm32_health_state_.attempted = true;
-            stm32_health_state_.success = ok;
-            stm32_health_state_.last_check_steady_ = std::chrono::steady_clock::now();
-            stm32_health_state_.text = ok ? "STOP 工作区探测正常" : "STM32 发送失败";
-        }
-    });
-}
-
-void LogDashboardServer::stopHealthMonitor() {
-    if (!health_monitor_running_.exchange(false)) {
-        return;
-    }
-    if (health_monitor_thread_.joinable()) {
-        health_monitor_thread_.join();
     }
 }
 
@@ -2052,92 +2344,29 @@ void LogDashboardServer::onDepthImage(const sensor_msgs::msg::Image::SharedPtr m
 
 void LogDashboardServer::onLidarScan(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
     const auto now = std::chrono::steady_clock::now();
+    std::string previous_front_nearest_zone;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         lidar_state_.message_count += 1;
         lidar_state_.last_message_steady_ = now;
+        previous_front_nearest_zone = lidar_state_.front_nearest_zone;
     }
 
-    bool valid = false;
-    bool obstacle_detected = false;
-    double nearest_m = 0.0;
-    double nearest_angle_deg = 0.0;
-    int valid_points = 0;
-    LidarRuntimeState::SectorRuntimeState negative_front_sector;
-    LidarRuntimeState::SectorRuntimeState front_sector;
-    LidarRuntimeState::SectorRuntimeState positive_front_sector;
-    std::string front_nearest_zone;
-    const auto update_sector =
-        [](LidarRuntimeState::SectorRuntimeState& sector, double range, double angle_deg) {
-            ++sector.valid_points;
-            if (!sector.valid || range < sector.nearest_m) {
-                sector.valid = true;
-                sector.nearest_m = range;
-                sector.nearest_angle_deg = angle_deg;
-                return true;
-            }
-            return false;
-        };
-
-    if (msg) {
-        double nearest = std::numeric_limits<double>::infinity();
-        for (std::size_t i = 0; i < msg->ranges.size(); ++i) {
-            const double range = static_cast<double>(msg->ranges[i]);
-            if (!std::isfinite(range) ||
-                range < std::max(static_cast<double>(msg->range_min), kLidarMinUsefulRangeMeters) ||
-                range > static_cast<double>(msg->range_max)) {
-                continue;
-            }
-
-            const double angle_rad =
-                static_cast<double>(msg->angle_min) +
-                static_cast<double>(i) * static_cast<double>(msg->angle_increment);
-            const double raw_angle_deg = angle_rad * 180.0 / std::acos(-1.0);
-            if (angleInWrappedRangeDeg(raw_angle_deg, kLidarBlockedAngleMinDeg, kLidarBlockedAngleMaxDeg)) {
-                continue;
-            }
-
-            const double normalized_angle_deg = normalizeAngleDeg(raw_angle_deg);
-            ++valid_points;
-            if (range < nearest) {
-                nearest = range;
-                nearest_angle_deg = normalized_angle_deg;
-            }
-
-            if (normalized_angle_deg >= -90.0 && normalized_angle_deg < -60.0) {
-                update_sector(negative_front_sector, range, normalized_angle_deg);
-            } else if (normalized_angle_deg >= -60.0 && normalized_angle_deg <= 60.0) {
-                if (update_sector(front_sector, range, normalized_angle_deg)) {
-                    if (normalized_angle_deg < -20.0) {
-                        front_nearest_zone = "左";
-                    } else if (normalized_angle_deg <= 20.0) {
-                        front_nearest_zone = "中";
-                    } else {
-                        front_nearest_zone = "右";
-                    }
-                }
-            } else if (normalized_angle_deg > 60.0 && normalized_angle_deg <= 90.0) {
-                update_sector(positive_front_sector, range, normalized_angle_deg);
-            }
-        }
-
-        valid = valid_points > 0;
-        obstacle_detected = valid_points > 0 && nearest <= kDepthObstacleMaxMeters;
-        if (valid_points > 0) {
-            nearest_m = nearest;
-        }
-    }
+    const auto lidar_input_frame =
+        auto_avoid_input_builder_.buildLidarInputFrame(msg, previous_front_nearest_zone);
 
     std::lock_guard<std::mutex> lock(state_mutex_);
-    lidar_state_.valid = valid;
-    lidar_state_.obstacle_detected = obstacle_detected;
-    lidar_state_.nearest_m = nearest_m;
-    lidar_state_.nearest_angle_deg = nearest_angle_deg;
-    lidar_state_.valid_points = valid_points;
-    lidar_state_.negative_front_sector = negative_front_sector;
-    lidar_state_.front_sector = front_sector;
-    lidar_state_.positive_front_sector = positive_front_sector;
-    lidar_state_.front_nearest_zone = front_nearest_zone;
+    lidar_state_.valid = lidar_input_frame.valid;
+    lidar_state_.obstacle_detected = lidar_input_frame.obstacle_detected;
+    lidar_state_.nearest_m = lidar_input_frame.nearest_m;
+    lidar_state_.nearest_angle_deg = lidar_input_frame.nearest_angle_deg;
+    lidar_state_.valid_points = lidar_input_frame.valid_points;
+    lidar_state_.negative_front_sector = lidar_input_frame.negative_front_sector;
+    lidar_state_.front_sector = lidar_input_frame.front_sector;
+    lidar_state_.auto_avoid_front_sector = lidar_input_frame.auto_avoid_front_sector;
+    lidar_state_.positive_front_sector = lidar_input_frame.positive_front_sector;
+    lidar_state_.avoidance_buffer_sector = lidar_input_frame.avoidance_buffer_sector;
+    lidar_state_.front_nearest_zone = lidar_input_frame.front_nearest_zone;
 }
 
 void LogDashboardServer::onImu(const sensor_msgs::msg::Imu::SharedPtr msg) {
@@ -2231,8 +2460,9 @@ std::string LogDashboardServer::stateJson() const {
     std::string live_rgb_yolo_payload;
     std::chrono::steady_clock::time_point rgb_yolo_received_steady;
     std::string active_workspace_mode;
-    Stm32HealthState stm32_health_state;
+    bool manual_workspace_working = false;
     VehicleCommandState vehicle_command_state;
+    AutoAvoidRuntimeState auto_avoid_runtime_state;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         depth_state = depth_state_;
@@ -2242,13 +2472,9 @@ std::string LogDashboardServer::stateJson() const {
         live_rgb_yolo_payload = latest_rgb_yolo_payload_;
         rgb_yolo_received_steady = latest_rgb_yolo_received_steady_;
         active_workspace_mode = active_workspace_mode_;
-        stm32_health_state = stm32_health_state_;
+        manual_workspace_working = manual_workspace_working_;
         vehicle_command_state = vehicle_command_state_;
-    }
-    bool stm32_bridge_ready = false;
-    {
-        std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
-        stm32_bridge_ready = static_cast<bool>(to_stm_);
+        auto_avoid_runtime_state = auto_avoid_runtime_state_;
     }
 
     const auto classifyTopicState =
@@ -2325,38 +2551,23 @@ std::string LogDashboardServer::stateJson() const {
             return deviceStateJson("not_started", "未启动");
         }
 
-        if (!stm32_bridge_ready) {
-            if (startup_grace_active) {
-                return deviceStateJson("not_started", "未启动");
+        if (stm32_emergency_active_.load()) {
+            return deviceStateJson("error", "急停中");
+        }
+
+        if (active_workspace_mode == "AVOIDANCE") {
+            if (auto_avoid_control_running_.load() || auto_avoid_stm32_drive_enabled_.load()) {
+                return deviceStateJson("started", "已启动 / 避障工作区控制中");
             }
-            return deviceStateJson("error", "启动出错 / STM32 串口未初始化");
+            return deviceStateJson("started", "已启动 / 避障工作区待命");
         }
-
-        const bool health_fresh =
-            stm32_health_state.attempted &&
-            stm32_health_state.last_check_steady_ != std::chrono::steady_clock::time_point{} &&
-            (now_steady - stm32_health_state.last_check_steady_) <= kStm32HealthFreshWindow;
-
-        if (active_workspace_mode != "STOP" && !health_fresh) {
-            return deviceStateJson("not_started", "停止模式下检测");
-        }
-
-        if (!health_fresh) {
-            if (startup_grace_active) {
-                return deviceStateJson("not_started", "未启动");
+        if (active_workspace_mode == "MANUAL") {
+            if (manual_workspace_working) {
+                return deviceStateJson("started", "已启动 / 手动工作区控制中");
             }
-            return deviceStateJson("error", "启动出错 / STM32 状态未检测");
+            return deviceStateJson("started", "已启动 / 手动工作区待命");
         }
-
-        if (stm32_health_state.success) {
-            return deviceStateJson("started", "已启动 / UART 通信正常");
-        }
-
-        const std::string text = trimWhitespace(stm32_health_state.text);
-        if (!text.empty()) {
-            return deviceStateJson("error", "启动出错 / " + text);
-        }
-        return deviceStateJson("error", "启动出错 / STM32 通信异常");
+        return deviceStateJson("started", "已启动 / 不做在线检测");
     };
 
     const bool gps_key_valid =
@@ -2477,6 +2688,92 @@ std::string LogDashboardServer::stateJson() const {
         << "\"zone\":\"" << jsonEscape(nearest_zone) << "\","
         << "\"distance_m\":" << (nearest_valid ? numberJson(nearest_distance_m, 2) : "null") << ","
         << "\"angle_deg\":" << (nearest_valid && nearest_has_angle ? numberJson(nearest_angle_deg, 1) : "null")
+        << "},"
+        << "\"auto_avoid\":{"
+        << "\"active\":" << boolJson(auto_avoid_runtime_state.active) << ","
+        << "\"has_decision\":" << boolJson(auto_avoid_runtime_state.has_decision) << ","
+        << "\"control_cycle_id\":" << auto_avoid_runtime_state.last_control_cycle_id << ","
+        << "\"snapshot_valid\":" << boolJson(auto_avoid_runtime_state.snapshot_valid) << ","
+        << "\"lidar_valid\":" << boolJson(auto_avoid_runtime_state.lidar_valid) << ","
+        << "\"imu_valid\":" << boolJson(auto_avoid_runtime_state.imu_valid) << ","
+        << "\"mode\":\"" << jsonEscape(
+                auto_avoid_runtime_state.has_decision ?
+                    AutoAvoidController::motionModeName(auto_avoid_runtime_state.last_decision.mode) :
+                    "") << "\","
+        << "\"state\":\"" << jsonEscape(
+                AutoAvoidController::avoidanceStageName(
+                    auto_avoid_runtime_state.last_decision.debug.state)) << "\","
+        << "\"direction\":\"" << jsonEscape(
+                AutoAvoidController::turnDirectionName(
+                    auto_avoid_runtime_state.last_decision.direction)) << "\","
+        << "\"speed_cm_s\":" << (auto_avoid_runtime_state.has_decision ?
+                std::to_string(auto_avoid_runtime_state.last_decision.speed_cm_s) : "null") << ","
+        << "\"steering_encoder\":" << (auto_avoid_runtime_state.has_decision ?
+                std::to_string(auto_avoid_runtime_state.last_decision.steering_encoder) : "null") << ","
+        << "\"reason_code\":\"" << jsonEscape(
+                AutoAvoidController::decisionReasonName(
+                    auto_avoid_runtime_state.last_decision.reason_code)) << "\","
+        << "\"fallback_reason\":\"" << jsonEscape(
+                AutoAvoidController::fallbackReasonName(
+                    auto_avoid_runtime_state.last_decision.fallback_reason)) << "\","
+        << "\"apply_result\":\"" << jsonEscape(auto_avoid_runtime_state.last_apply_result) << "\","
+        << "\"snapshot_fresh\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.snapshot_fresh) << ","
+        << "\"front_nearest_valid\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.front_nearest_valid) << ","
+        << "\"front_nearest_m\":" << (
+                auto_avoid_runtime_state.last_decision.debug.front_nearest_valid ?
+                    numberJson(auto_avoid_runtime_state.last_decision.debug.front_nearest_m, 2) :
+                    "null") << ","
+        << "\"front_angle_deg\":" << (
+                auto_avoid_runtime_state.last_decision.debug.front_nearest_valid ?
+                    numberJson(auto_avoid_runtime_state.last_decision.debug.front_angle_deg, 1) :
+                    "null") << ","
+        << "\"front_support_points\":" <<
+                auto_avoid_runtime_state.last_decision.debug.front_support_points << ","
+        << "\"raw_zone\":\"" << jsonEscape(
+                Judgment::frontObstacleZoneName(
+                    auto_avoid_runtime_state.last_decision.debug.raw_zone)) << "\","
+        << "\"resolved_zone\":\"" << jsonEscape(
+                Judgment::frontObstacleZoneName(
+                    auto_avoid_runtime_state.last_decision.debug.resolved_zone)) << "\","
+        << "\"spike_suppressed\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.spike_suppressed) << ","
+        << "\"zone_stabilized\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.zone_stabilized) << ","
+        << "\"zone_ambiguous\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.zone_ambiguous) << ","
+        << "\"boundary_stop\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.boundary_stop) << ","
+        << "\"emergency_stop\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.emergency_stop) << ","
+        << "\"replan_triggered\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.replan_triggered) << ","
+        << "\"used_imu_heading\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.used_imu_heading) << ","
+        << "\"used_encoder_fallback\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.used_encoder_fallback) << ","
+        << "\"encoder_fallback_kind\":\"" << jsonEscape(
+                AutoAvoidController::encoderFallbackKindName(
+                    auto_avoid_runtime_state.last_decision.debug.encoder_fallback_kind)) << "\","
+        << "\"target_yaw_valid\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.target_yaw_valid) << ","
+        << "\"target_yaw_deg\":" << (
+                auto_avoid_runtime_state.last_decision.debug.target_yaw_valid ?
+                    numberJson(auto_avoid_runtime_state.last_decision.debug.target_yaw_deg, 1) :
+                    "null") << ","
+        << "\"target_yaw_locked_ms\":" <<
+                auto_avoid_runtime_state.last_decision.debug.target_yaw_locked_ms << ","
+        << "\"target_yaw_locked_by_stage\":\"" << jsonEscape(
+                AutoAvoidController::avoidanceStageName(
+                    auto_avoid_runtime_state.last_decision.debug.target_yaw_locked_by_stage)) << "\","
+        << "\"target_yaw_locked_this_cycle\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.target_yaw_locked_this_cycle) << ","
+        << "\"target_yaw_clear_reason\":\"" << jsonEscape(
+                AutoAvoidController::targetYawClearReasonName(
+                    auto_avoid_runtime_state.last_decision.debug.target_yaw_clear_reason)) << "\","
+        << "\"debug_text\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug_text) << "\""
         << "}"
         << "},"
         << "\"rgb_yolo_payload\":\"" << jsonEscape(rgb_yolo_payload) << "\""
