@@ -28,6 +28,10 @@ constexpr int kWallLikeClusterMinPoints = 6;
 constexpr double kWallLikeClusterMinSpanDeg = 10.0;
 constexpr double kWallLikeClusterEdgeAngleDeg = 18.0;
 constexpr double kWallLikeClusterMaxAverageDeltaMeters = 0.10;
+constexpr double kWallLikePrimaryTargetPenalty = 2.10;
+constexpr char kFrontTargetRoleDiscretePrimary[] = "discrete_primary";
+constexpr char kFrontTargetRoleWallConstraint[] = "wall_constraint";
+constexpr char kFrontTargetRoleFallbackFront[] = "fallback_front";
 
 double normalizeAngleDeg(double angle_deg) {
     if (!std::isfinite(angle_deg)) {
@@ -136,23 +140,9 @@ double frontClusterSelectionScore(const FrontClusterCandidate& candidate) {
         0.8 * (1.0 - std::clamp(candidate.span_deg / 24.0, 0.0, 1.0));
     const double support_bonus =
         0.07 * std::min(candidate.support_points, 10);
-    const double wall_penalty = candidate.wall_like ? 1.35 : 0.0;
+    const double wall_penalty =
+        candidate.wall_like ? kWallLikePrimaryTargetPenalty : 0.0;
     return distance_score + center_bonus + compact_bonus + support_bonus - wall_penalty;
-}
-
-std::string selectionReasonForCluster(
-    const FrontClusterCandidate& selected,
-    bool wall_like_cluster_suppressed) {
-    if (!selected.valid) {
-        return "front_sector_fallback";
-    }
-    if (selected.wall_like) {
-        return "wall_like_cluster_selected";
-    }
-    if (wall_like_cluster_suppressed) {
-        return "discrete_cluster_over_wall";
-    }
-    return "scored_discrete_cluster";
 }
 
 }  // namespace
@@ -266,11 +256,15 @@ AutoAvoidInputBuilder::LidarInputFrame AutoAvoidInputBuilder::buildLidarInputFra
             });
 
         FrontClusterCandidate best_cluster;
+        FrontClusterCandidate best_discrete_cluster;
+        FrontClusterCandidate best_wall_cluster;
         bool wall_like_cluster_suppressed = false;
         std::vector<FrontSectorPoint> current_cluster;
         int next_cluster_id = 0;
         const auto consider_cluster =
             [&best_cluster,
+                &best_discrete_cluster,
+                &best_wall_cluster,
                 &wall_like_cluster_suppressed,
                 &next_cluster_id,
                 &frame](const std::vector<FrontSectorPoint>& cluster) {
@@ -324,6 +318,26 @@ AutoAvoidInputBuilder::LidarInputFrame AutoAvoidInputBuilder::buildLidarInputFra
                     frame.positive_front_sector);
                 candidate.score = frontClusterSelectionScore(candidate);
 
+                const auto better_than =
+                    [](const FrontClusterCandidate& lhs,
+                        const FrontClusterCandidate& rhs) {
+                        return !rhs.valid ||
+                            lhs.score > rhs.score + 1e-6 ||
+                            (std::abs(lhs.score - rhs.score) < 1e-6 &&
+                                lhs.median_range_m < rhs.median_range_m) ||
+                            (std::abs(lhs.score - rhs.score) < 1e-6 &&
+                                std::abs(lhs.median_range_m - rhs.median_range_m) < 1e-6 &&
+                                lhs.nearest_m < rhs.nearest_m);
+                    };
+
+                if (candidate.wall_like) {
+                    if (better_than(candidate, best_wall_cluster)) {
+                        best_wall_cluster = candidate;
+                    }
+                } else if (better_than(candidate, best_discrete_cluster)) {
+                    best_discrete_cluster = candidate;
+                }
+
                 if (candidate.wall_like &&
                     best_cluster.valid &&
                     !best_cluster.wall_like &&
@@ -331,13 +345,7 @@ AutoAvoidInputBuilder::LidarInputFrame AutoAvoidInputBuilder::buildLidarInputFra
                     wall_like_cluster_suppressed = true;
                 }
 
-                if (!best_cluster.valid ||
-                    candidate.score > best_cluster.score + 1e-6 ||
-                    (std::abs(candidate.score - best_cluster.score) < 1e-6 &&
-                        candidate.median_range_m < best_cluster.median_range_m) ||
-                    (std::abs(candidate.score - best_cluster.score) < 1e-6 &&
-                        std::abs(candidate.median_range_m - best_cluster.median_range_m) < 1e-6 &&
-                        candidate.nearest_m < best_cluster.nearest_m)) {
+                if (better_than(candidate, best_cluster)) {
                     if (best_cluster.valid &&
                         best_cluster.wall_like &&
                         !candidate.wall_like &&
@@ -365,44 +373,93 @@ AutoAvoidInputBuilder::LidarInputFrame AutoAvoidInputBuilder::buildLidarInputFra
         }
         consider_cluster(current_cluster);
 
-        if (best_cluster.valid) {
+        FrontClusterCandidate selected_cluster = best_cluster;
+        std::string selected_target_role;
+        std::string selection_reason;
+        std::string raw_zone_source;
+        bool selected_is_discrete_primary = false;
+        bool selected_is_wall_constraint = false;
+        bool raw_zone_from_discrete_target = false;
+        bool wall_like_suppressed_from_zone = false;
+        if (best_discrete_cluster.valid) {
+            selected_cluster = best_discrete_cluster;
+            selected_target_role = kFrontTargetRoleDiscretePrimary;
+            selected_is_discrete_primary = true;
+            raw_zone_from_discrete_target = true;
+            wall_like_suppressed_from_zone = best_wall_cluster.valid;
+            wall_like_cluster_suppressed =
+                wall_like_cluster_suppressed || best_wall_cluster.valid;
+            selection_reason =
+                best_wall_cluster.valid ?
+                    "discrete_cluster_over_wall" :
+                    "scored_discrete_cluster";
+            raw_zone_source = "discrete_primary_cluster";
+        } else if (best_cluster.valid) {
+            selected_cluster = best_cluster;
+            if (selected_cluster.wall_like) {
+                selected_target_role = kFrontTargetRoleWallConstraint;
+                selected_is_wall_constraint = true;
+                selection_reason = "wall_constraint_cluster";
+                raw_zone_source = "wall_constraint_cluster";
+            } else {
+                selected_target_role = kFrontTargetRoleDiscretePrimary;
+                selected_is_discrete_primary = true;
+                raw_zone_from_discrete_target = true;
+                selection_reason = "scored_discrete_cluster";
+                raw_zone_source = "discrete_primary_cluster";
+            }
+        }
+
+        if (selected_cluster.valid) {
             frame.auto_avoid_front_sector.valid = true;
-            frame.auto_avoid_front_sector.nearest_m = best_cluster.nearest_m;
+            frame.auto_avoid_front_sector.nearest_m = selected_cluster.nearest_m;
             frame.auto_avoid_front_sector.nearest_angle_deg =
-                best_cluster.nearest_angle_deg;
-            frame.auto_avoid_front_sector.support_points = best_cluster.support_points;
+                selected_cluster.nearest_angle_deg;
+            frame.auto_avoid_front_sector.support_points = selected_cluster.support_points;
             frame.front_target_selection.valid = true;
             frame.front_target_selection.selected_front_cluster_id =
-                best_cluster.cluster_id;
+                selected_cluster.cluster_id;
             frame.front_target_selection.selected_front_cluster_score =
-                best_cluster.score;
+                selected_cluster.score;
             frame.front_target_selection.selected_front_cluster_wall_like =
-                best_cluster.wall_like;
+                selected_cluster.wall_like;
+            frame.front_target_selection.selected_front_cluster_is_discrete_primary =
+                selected_is_discrete_primary;
+            frame.front_target_selection.selected_front_cluster_is_wall_like =
+                selected_is_wall_constraint;
             frame.front_target_selection.selected_front_cluster_points =
-                best_cluster.support_points;
+                selected_cluster.support_points;
             frame.front_target_selection.selected_front_cluster_span_deg =
-                best_cluster.span_deg;
+                selected_cluster.span_deg;
             frame.front_target_selection.selected_front_cluster_median_range =
-                best_cluster.median_range_m;
+                selected_cluster.median_range_m;
             frame.front_target_selection.selected_front_cluster_nearest_range =
-                best_cluster.nearest_m;
+                selected_cluster.nearest_m;
             frame.front_target_selection.wall_like_cluster_suppressed =
                 wall_like_cluster_suppressed;
+            frame.front_target_selection.raw_zone_from_discrete_target =
+                raw_zone_from_discrete_target;
+            frame.front_target_selection.wall_like_suppressed_from_zone =
+                wall_like_suppressed_from_zone;
+            frame.front_target_selection.front_target_role =
+                selected_target_role;
             frame.front_target_selection.front_target_selection_reason =
-                selectionReasonForCluster(best_cluster, wall_like_cluster_suppressed);
-            frame.front_target_selection.raw_zone_source = "selected_front_cluster";
+                selection_reason;
+            frame.front_target_selection.raw_zone_source = raw_zone_source;
         } else {
             frame.auto_avoid_front_sector = frame.front_sector;
             frame.auto_avoid_front_sector.support_points =
                 frame.front_sector.valid ? 1 : 0;
             frame.auto_avoid_front_sector.valid_points = frame.front_sector.valid_points;
             frame.front_target_selection = FrontTargetSelection{};
+            frame.front_target_selection.front_target_role = kFrontTargetRoleFallbackFront;
             frame.front_target_selection.front_target_selection_reason =
                 "front_sector_fallback";
             frame.front_target_selection.raw_zone_source = "front_sector_fallback";
         }
     }
     if (front_sector_points.empty()) {
+        frame.front_target_selection.front_target_role = kFrontTargetRoleFallbackFront;
         frame.front_target_selection.front_target_selection_reason =
             "front_sector_empty";
         frame.front_target_selection.raw_zone_source = "front_sector_empty";

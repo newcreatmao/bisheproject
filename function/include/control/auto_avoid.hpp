@@ -21,12 +21,17 @@ public:
         int selected_front_cluster_id = -1;
         double selected_front_cluster_score = 0.0;
         bool selected_front_cluster_wall_like = false;
+        bool selected_front_cluster_is_discrete_primary = false;
+        bool selected_front_cluster_is_wall_like = false;
         int selected_front_cluster_points = 0;
         double selected_front_cluster_span_deg = 0.0;
         double selected_front_cluster_median_range = 0.0;
         double selected_front_cluster_nearest_range = 0.0;
         bool wall_like_cluster_suppressed = false;
+        bool raw_zone_from_discrete_target = false;
+        bool wall_like_suppressed_from_zone = false;
         std::string front_target_selection_reason;
+        std::string front_target_role;
         std::string raw_zone_source;
     };
 
@@ -142,6 +147,8 @@ public:
         double avoidance_release_distance_m = 1.30;
         double active_stage_front_replan_distance_m = 1.50;
         double active_stage_front_replan_center_half_width_deg = 32.0;
+        double active_stage_wall_replan_distance_m = 1.05;
+        double active_stage_wall_replan_center_half_width_deg = 18.0;
         double linear_avoidance_front_half_width_deg = 58.0;
         int linear_avoidance_encoder_per_10deg = 40;
         int lidar_filter_window = 3;
@@ -190,11 +197,11 @@ public:
         double boundary_recovery_critical_margin_m = 0.08;
         double boundary_recovery_max_correction_deg = 4.2;
         double boundary_recovery_straight_weight = 1.00;
-        double boundary_recovery_turning_weight = 0.40;
-        double boundary_recovery_clearance_hold_weight = 0.55;
+        double boundary_recovery_turning_weight = 0.58;
+        double boundary_recovery_clearance_hold_weight = 0.68;
         double boundary_recovery_return_to_path_weight = 0.90;
         double boundary_recovery_tail_limit_weight = 0.45;
-        double boundary_override_activation_risk = 0.32;
+        double boundary_override_activation_risk = 0.26;
         double boundary_override_max_reduction_ratio = 0.85;
         double return_to_path_balance_gain_deg_per_m = 6.0;
         double return_to_path_balance_max_correction_deg = 2.8;
@@ -217,8 +224,12 @@ public:
         int obstacle_zone_switch_confirm_ticks = 4;
         int obstacle_zone_override_confirm_ticks = 2;
         int committed_direction_override_confirm_ticks = 2;
+        double center_turn_min_side_distance_delta_m = 0.10;
+        double center_turn_reference_balance_bias_m = 0.08;
+        double center_turn_boundary_risk_delta = 0.08;
         int clearance_hold_speed_cm_s = 30;
         int return_heading_speed_cm_s = 40;
+        double return_to_path_front_clear_distance_m = 1.18;
         double straight_steering_slew_deg_per_tick = 2.0;
         double avoidance_steering_slew_far_deg_per_tick = 2.0;
         double avoidance_steering_slew_near_deg_per_tick = 4.0;
@@ -255,14 +266,24 @@ public:
         bool boundary_stop = false;
         bool emergency_stop = false;
         bool replan_triggered = false;
+        std::string active_stage_priority_mode;
+        bool replan_override_active = false;
+        std::string replan_override_reason;
+        bool active_stage_protection_active = false;
+        std::string active_stage_protection_reason;
         bool resolved_zone_override_active = false;
         std::string resolved_zone_override_reason;
         bool committed_direction_override_active = false;
         std::string committed_direction_override_reason;
+        std::string center_turn_decision_mode;
+        bool center_turn_bias_removed = false;
+        std::string center_turn_decision_reason;
         bool return_heading_protected = false;
         int return_heading_protect_ticks_remaining = 0;
         bool lateral_balance_active = false;
         double lateral_balance_correction_deg = 0.0;
+        double main_steering_deg = 0.0;
+        std::string main_steering_source;
         bool wall_constraint_active = false;
         std::string wall_constraint_side;
         double wall_constraint_correction_deg = 0.0;
@@ -271,10 +292,14 @@ public:
         BoundaryRecoveryLevel boundary_recovery_level = BoundaryRecoveryLevel::None;
         double boundary_recovery_correction_deg = 0.0;
         bool boundary_recovery_limited_by_tail = false;
+        bool boundary_recovery_applied = false;
+        double boundary_recovery_delta_deg = 0.0;
         bool boundary_override_active = false;
         std::string boundary_override_reason;
         bool boundary_override_reduced_main_steering = false;
         double boundary_override_reduced_by_deg = 0.0;
+        bool boundary_override_applied = false;
+        double boundary_override_delta_deg = 0.0;
         double boundary_risk_left = 0.0;
         double boundary_risk_right = 0.0;
         double boundary_risk_delta = 0.0;
@@ -312,6 +337,9 @@ public:
         bool path_recovery_ready = false;
         bool path_recovery_settled = false;
         bool exit_to_idle_ready = false;
+        double smoothed_steering_deg = 0.0;
+        double guarded_steering_deg = 0.0;
+        int final_encoder_command = 0;
         bool used_imu_heading = false;
         bool used_encoder_fallback = false;
         EncoderFallbackKind encoder_fallback_kind = EncoderFallbackKind::None;
@@ -474,6 +502,15 @@ private:
         bool conflict_with_path = false;
     };
 
+    struct ActiveStagePriorityDecision {
+        bool continue_active_stage = false;
+        bool protection_active = false;
+        std::string protection_reason;
+        bool replan_override_active = false;
+        std::string replan_override_reason;
+        std::string priority_mode = "standard_front_priority";
+    };
+
     SensorSnapshot normalizedSnapshot(const SensorSnapshot& snapshot) const;
     SensorSnapshot bindManagedTargetYaw(const SensorSnapshot& snapshot);
     SensorSnapshot filteredSnapshot(const SensorSnapshot& snapshot);
@@ -522,8 +559,16 @@ private:
     bool shouldReplanFrontDuringActiveAvoidance(
         const SensorSnapshot& snapshot,
         const Judgment::FrontObstacleResult& front_obstacle) const;
+    ActiveStagePriorityDecision evaluateActiveStagePriority(
+        const SnapshotAssessment& assessment,
+        const Judgment::FrontObstacleResult& front_obstacle) const;
+    void applyActiveStagePriorityDebug(
+        const ActiveStagePriorityDecision& decision,
+        DebugInfo& debug) const;
     void resetAvoidanceState();
     bool hasCommittedAvoidanceTurn() const;
+    bool frontTargetIsDiscretePrimary(const SensorSnapshot& snapshot) const;
+    bool frontTargetIsWallConstraint(const SensorSnapshot& snapshot) const;
     TurnDirection turnDirectionForObstacleZone(
         Judgment::FrontObstacleZone zone) const;
     Judgment::FrontObstacleZone obstacleSideZoneForTurnDirection(
@@ -585,6 +630,13 @@ private:
     void applyBoundaryRecoveryDebug(
         const BoundaryRecoveryDecision& decision,
         DebugInfo& debug) const;
+    void applySteeringArbitrationDebug(
+        double main_steering_deg,
+        const std::string& main_steering_source,
+        const BoundaryRecoveryDecision& boundary_recovery,
+        double smoothed_steering_deg,
+        double guarded_steering_deg,
+        DebugInfo& debug) const;
     double sideBalanceFromAssessment(const SnapshotAssessment& assessment) const;
     bool frontClearEnoughForPathRecovery(const SensorSnapshot& snapshot) const;
     bool tailClearanceComplete(const SensorSnapshot& snapshot) const;
@@ -619,7 +671,9 @@ private:
         bool& stabilized,
         int confirm_ticks_override = 0);
     bool isSectorBufferNearest(const SensorSnapshot& snapshot) const;
-    TurnDirection chooseCenterTurnDirection(const SensorSnapshot& snapshot) const;
+    TurnDirection chooseCenterTurnDirection(
+        const SnapshotAssessment& assessment,
+        DebugInfo* debug = nullptr);
     std::string formatDebugText(const DebugInfo& debug) const;
     Command driveCommand(
         TurnDirection direction,
@@ -650,4 +704,5 @@ private:
     SteeringSmoothingState steering_smoothing_state_;
     TargetYawState target_yaw_state_;
     PathReferenceState path_reference_state_;
+    TurnDirection center_turn_tie_break_direction_ = TurnDirection::Right;
 };

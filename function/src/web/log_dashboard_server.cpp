@@ -216,12 +216,19 @@ void appendAutoAvoidCycleTraceCsv(const std::string& line) {
             << "front_support_points,selected_front_cluster_id,selected_front_cluster_score,"
             << "selected_front_cluster_wall_like,selected_front_cluster_points,"
             << "selected_front_cluster_span_deg,selected_front_cluster_median_range,"
-            << "selected_front_cluster_nearest_range,wall_like_cluster_suppressed,"
-            << "front_target_selection_reason,raw_zone_source,raw_zone,resolved_zone,"
+            << "selected_front_cluster_nearest_range,selected_front_cluster_is_discrete_primary,"
+            << "selected_front_cluster_is_wall_like,wall_like_cluster_suppressed,"
+            << "front_target_role,raw_zone_from_discrete_target,"
+            << "wall_like_suppressed_from_zone,front_target_selection_reason,"
+            << "raw_zone_source,raw_zone,resolved_zone,"
             << "spike_suppressed,zone_stabilized,zone_ambiguous,resolved_zone_override_active,"
             << "resolved_zone_override_reason,committed_direction_override_active,"
-            << "committed_direction_override_reason,sector_buffer_active_continue,"
-            << "boundary_stop,emergency_stop,replan_triggered,return_heading_protected,"
+            << "committed_direction_override_reason,center_turn_decision_mode,"
+            << "center_turn_bias_removed,center_turn_decision_reason,"
+            << "sector_buffer_active_continue,"
+            << "boundary_stop,emergency_stop,replan_triggered,active_stage_priority_mode,"
+            << "replan_override_active,replan_override_reason,active_stage_protection_active,"
+            << "active_stage_protection_reason,return_heading_protected,"
             << "return_heading_protect_ticks_remaining,lateral_balance_active,"
             << "lateral_balance_correction_deg,wall_constraint_active,wall_constraint_side,"
             << "wall_constraint_correction_deg,boundary_recovery_active,boundary_recovery_side,"
@@ -230,7 +237,11 @@ void appendAutoAvoidCycleTraceCsv(const std::string& line) {
             << "boundary_override_reason,boundary_override_reduced_main_steering,"
             << "boundary_override_reduced_by_deg,boundary_risk_left,boundary_risk_right,"
             << "boundary_risk_delta,boundary_recovery_and_path_aligned,"
-            << "boundary_recovery_and_path_conflict,path_reference_valid,"
+            << "boundary_recovery_and_path_conflict,main_steering_deg,"
+            << "main_steering_source,boundary_override_applied,boundary_override_delta_deg,"
+            << "boundary_recovery_applied,boundary_recovery_delta_deg,"
+            << "smoothed_steering_deg,guarded_steering_deg,final_encoder_command,"
+            << "path_reference_valid,"
             << "reference_yaw_deg,reference_side_balance,reference_left_distance_m,"
             << "reference_right_distance_m,path_reference_captured_ms,path_reference_captured_stage,"
             << "path_reference_captured_this_cycle,path_reference_clear_reason,"
@@ -2155,7 +2166,14 @@ void LogDashboardServer::runAutoAvoidControlLoop() {
             << csvNumber(
                    command.debug.front_target_selection.selected_front_cluster_nearest_range,
                    3) << ","
+            << csvBool(
+                   command.debug.front_target_selection.selected_front_cluster_is_discrete_primary) << ","
+            << csvBool(
+                   command.debug.front_target_selection.selected_front_cluster_is_wall_like) << ","
             << csvBool(command.debug.front_target_selection.wall_like_cluster_suppressed) << ","
+            << csvField(command.debug.front_target_selection.front_target_role) << ","
+            << csvBool(command.debug.front_target_selection.raw_zone_from_discrete_target) << ","
+            << csvBool(command.debug.front_target_selection.wall_like_suppressed_from_zone) << ","
             << csvField(command.debug.front_target_selection.front_target_selection_reason) << ","
             << csvField(command.debug.front_target_selection.raw_zone_source) << ","
             << csvField(Judgment::frontObstacleZoneName(command.debug.raw_zone)) << ","
@@ -2167,10 +2185,18 @@ void LogDashboardServer::runAutoAvoidControlLoop() {
             << csvField(command.debug.resolved_zone_override_reason) << ","
             << csvBool(command.debug.committed_direction_override_active) << ","
             << csvField(command.debug.committed_direction_override_reason) << ","
+            << csvField(command.debug.center_turn_decision_mode) << ","
+            << csvBool(command.debug.center_turn_bias_removed) << ","
+            << csvField(command.debug.center_turn_decision_reason) << ","
             << csvBool(command.debug.sector_buffer_active_continue) << ","
             << csvBool(command.debug.boundary_stop) << ","
             << csvBool(command.debug.emergency_stop) << ","
             << csvBool(command.debug.replan_triggered) << ","
+            << csvField(command.debug.active_stage_priority_mode) << ","
+            << csvBool(command.debug.replan_override_active) << ","
+            << csvField(command.debug.replan_override_reason) << ","
+            << csvBool(command.debug.active_stage_protection_active) << ","
+            << csvField(command.debug.active_stage_protection_reason) << ","
             << csvBool(command.debug.return_heading_protected) << ","
             << command.debug.return_heading_protect_ticks_remaining << ","
             << csvBool(command.debug.lateral_balance_active) << ","
@@ -2196,6 +2222,15 @@ void LogDashboardServer::runAutoAvoidControlLoop() {
             << csvNumber(command.debug.boundary_risk_delta, 3) << ","
             << csvBool(command.debug.boundary_recovery_and_path_aligned) << ","
             << csvBool(command.debug.boundary_recovery_and_path_conflict) << ","
+            << csvNumber(command.debug.main_steering_deg, 3) << ","
+            << csvField(command.debug.main_steering_source) << ","
+            << csvBool(command.debug.boundary_override_applied) << ","
+            << csvNumber(command.debug.boundary_override_delta_deg, 3) << ","
+            << csvBool(command.debug.boundary_recovery_applied) << ","
+            << csvNumber(command.debug.boundary_recovery_delta_deg, 3) << ","
+            << csvNumber(command.debug.smoothed_steering_deg, 3) << ","
+            << csvNumber(command.debug.guarded_steering_deg, 3) << ","
+            << command.debug.final_encoder_command << ","
             << csvBool(command.debug.path_reference_valid) << ","
             << csvNumber(command.debug.reference_yaw_deg, 3) << ","
             << csvNumber(command.debug.reference_side_balance, 3) << ","
@@ -2882,8 +2917,18 @@ std::string LogDashboardServer::stateJson() const {
                         auto_avoid_runtime_state.last_decision.debug.front_target_selection.selected_front_cluster_nearest_range,
                         2) :
                     "null") << ","
+        << "\"selected_front_cluster_is_discrete_primary\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.front_target_selection.selected_front_cluster_is_discrete_primary) << ","
+        << "\"selected_front_cluster_is_wall_like\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.front_target_selection.selected_front_cluster_is_wall_like) << ","
         << "\"wall_like_cluster_suppressed\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.front_target_selection.wall_like_cluster_suppressed) << ","
+        << "\"front_target_role\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.front_target_selection.front_target_role) << "\","
+        << "\"raw_zone_from_discrete_target\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.front_target_selection.raw_zone_from_discrete_target) << ","
+        << "\"wall_like_suppressed_from_zone\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.front_target_selection.wall_like_suppressed_from_zone) << ","
         << "\"front_target_selection_reason\":\"" << jsonEscape(
                 auto_avoid_runtime_state.last_decision.debug.front_target_selection.front_target_selection_reason) << "\","
         << "\"raw_zone_source\":\"" << jsonEscape(
@@ -2908,6 +2953,12 @@ std::string LogDashboardServer::stateJson() const {
                 auto_avoid_runtime_state.last_decision.debug.committed_direction_override_active) << ","
         << "\"committed_direction_override_reason\":\"" << jsonEscape(
                 auto_avoid_runtime_state.last_decision.debug.committed_direction_override_reason) << "\","
+        << "\"center_turn_decision_mode\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.center_turn_decision_mode) << "\","
+        << "\"center_turn_bias_removed\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.center_turn_bias_removed) << ","
+        << "\"center_turn_decision_reason\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.center_turn_decision_reason) << "\","
         << "\"sector_buffer_active_continue\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.sector_buffer_active_continue) << ","
         << "\"boundary_stop\":" << boolJson(
@@ -2916,6 +2967,16 @@ std::string LogDashboardServer::stateJson() const {
                 auto_avoid_runtime_state.last_decision.debug.emergency_stop) << ","
         << "\"replan_triggered\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.replan_triggered) << ","
+        << "\"active_stage_priority_mode\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.active_stage_priority_mode) << "\","
+        << "\"replan_override_active\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.replan_override_active) << ","
+        << "\"replan_override_reason\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.replan_override_reason) << "\","
+        << "\"active_stage_protection_active\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.active_stage_protection_active) << ","
+        << "\"active_stage_protection_reason\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.active_stage_protection_reason) << "\","
         << "\"return_heading_protected\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.return_heading_protected) << ","
         << "\"return_heading_protect_ticks_remaining\":" <<
@@ -2960,6 +3021,24 @@ std::string LogDashboardServer::stateJson() const {
                 auto_avoid_runtime_state.last_decision.debug.boundary_recovery_and_path_aligned) << ","
         << "\"boundary_recovery_and_path_conflict\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.boundary_recovery_and_path_conflict) << ","
+        << "\"main_steering_deg\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.main_steering_deg, 2) << ","
+        << "\"main_steering_source\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.main_steering_source) << "\","
+        << "\"boundary_override_applied\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.boundary_override_applied) << ","
+        << "\"boundary_override_delta_deg\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.boundary_override_delta_deg, 2) << ","
+        << "\"boundary_recovery_applied\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.boundary_recovery_applied) << ","
+        << "\"boundary_recovery_delta_deg\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.boundary_recovery_delta_deg, 2) << ","
+        << "\"smoothed_steering_deg\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.smoothed_steering_deg, 2) << ","
+        << "\"guarded_steering_deg\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.guarded_steering_deg, 2) << ","
+        << "\"final_encoder_command\":" <<
+                auto_avoid_runtime_state.last_decision.debug.final_encoder_command << ","
         << "\"path_reference_valid\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.path_reference_valid) << ","
         << "\"reference_yaw_deg\":" << (

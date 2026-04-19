@@ -10,6 +10,10 @@
 
 namespace {
 
+constexpr char kFrontTargetRoleDiscretePrimary[] = "discrete_primary";
+constexpr char kFrontTargetRoleWallConstraint[] = "wall_constraint";
+constexpr char kFrontTargetRoleFallbackFront[] = "fallback_front";
+
 int clampSpeed(int speed_cm_s) {
     return std::clamp(speed_cm_s, 0, 100);
 }
@@ -113,6 +117,7 @@ void AutoAvoidController::reset() {
     target_yaw_state_.last_clear_reason = TargetYawClearReason::ControllerReset;
     path_reference_state_ = PathReferenceState{};
     path_reference_state_.clear_reason = PathReferenceClearReason::ControllerReset;
+    center_turn_tie_break_direction_ = TurnDirection::Right;
 }
 
 const char* AutoAvoidController::motionModeName(MotionMode mode) {
@@ -282,6 +287,12 @@ AutoAvoidController::Command AutoAvoidController::decide(
     auto assessment = assessSnapshot(bindManagedTargetYaw(snapshot));
     auto front_obstacle = assessment.front_obstacle;
     auto debug = baseDebugInfo(assessment);
+    debug.active_stage_priority_mode =
+        active_avoidance_state_.stage == AvoidanceStage::Idle ?
+            "idle_front_priority" :
+            (active_avoidance_state_.stage == AvoidanceStage::Turning ?
+                "turning_front_priority" :
+                "standard_front_priority");
 
     if (!assessment.snapshot.lidar_valid) {
         resetMotionHysteresis();
@@ -369,12 +380,6 @@ AutoAvoidController::Command AutoAvoidController::decide(
         assessment.front_distance_valid &&
         avoidanceTurnActive(assessment.safety_front_m);
 
-    if (shouldReplanFrontDuringActiveAvoidance(assessment.snapshot, front_obstacle)) {
-        resetAvoidanceState();
-        front_obstacle.too_close = true;
-        debug.replan_triggered = true;
-    }
-
     const auto zone_resolution =
         resolveFrontObstacleZone(assessment, front_obstacle);
     front_obstacle = zone_resolution.obstacle;
@@ -388,6 +393,22 @@ AutoAvoidController::Command AutoAvoidController::decide(
         debug.reason_code = DecisionReason::FrontZoneBuffer;
         debug.fallback_reason = FallbackReason::FrontZoneBuffer;
         return neutralSafeCommand(debug);
+    }
+
+    const bool protected_active_stage =
+        active_avoidance_state_.stage == AvoidanceStage::ClearanceHold ||
+        active_avoidance_state_.stage == AvoidanceStage::ReturnHeading;
+    if (protected_active_stage) {
+        const auto priority =
+            evaluateActiveStagePriority(assessment, front_obstacle);
+        applyActiveStagePriorityDebug(priority, debug);
+        if (priority.replan_override_active) {
+            resetAvoidanceState();
+            front_obstacle.too_close = true;
+            debug.replan_triggered = true;
+        } else if (priority.continue_active_stage) {
+            return decideActiveAvoidanceStage(assessment, front_obstacle, debug);
+        }
     }
 
     if (front_obstacle.too_close) {
@@ -574,12 +595,13 @@ AutoAvoidController::ObstacleZoneResolution AutoAvoidController::resolveFrontObs
     ObstacleZoneResolution resolution;
     resolution.obstacle = front_obstacle;
     const auto preferred_direction = turnDirectionForObstacleZone(front_obstacle.zone);
+    const bool preferred_target_is_discrete_primary =
+        frontTargetIsDiscretePrimary(assessment.snapshot);
     const bool conflict_with_committed_direction =
         hasCommittedAvoidanceTurn() &&
         isTurningDirection(preferred_direction) &&
         preferred_direction != active_avoidance_state_.committed_direction &&
-        (!assessment.snapshot.front_target_selection.valid ||
-            !assessment.snapshot.front_target_selection.selected_front_cluster_wall_like);
+        preferred_target_is_discrete_primary;
     if (!isFrontZoneBuffer(front_obstacle)) {
         if (front_obstacle.too_close) {
             bool stabilized = false;
@@ -628,25 +650,24 @@ AutoAvoidController::Command AutoAvoidController::decideTooCloseFront(
     DebugInfo debug) {
     capturePathReferenceIfNeeded(assessment);
     TurnDirection direction = active_avoidance_state_.committed_direction;
+    const bool discrete_primary =
+        frontTargetIsDiscretePrimary(assessment.snapshot);
     const TurnDirection raw_observed_direction =
         turnDirectionForObstacleZone(debug.raw_zone);
     const TurnDirection resolved_observed_direction =
         turnDirectionForObstacleZone(front_obstacle.zone);
     if (!isTurningDirection(direction)) {
-        if (isTurningDirection(resolved_observed_direction)) {
+        if (discrete_primary && isTurningDirection(resolved_observed_direction)) {
             direction = resolved_observed_direction;
         } else {
-            direction = chooseCenterTurnDirection(assessment.snapshot);
+            direction = chooseCenterTurnDirection(assessment, &debug);
         }
         active_avoidance_state_.pending_override_direction = TurnDirection::Straight;
         active_avoidance_state_.pending_override_ticks = 0;
     } else {
-        const bool preferred_target_is_not_wall_like =
-            !assessment.snapshot.front_target_selection.valid ||
-            !assessment.snapshot.front_target_selection.selected_front_cluster_wall_like;
         if (isTurningDirection(raw_observed_direction) &&
             raw_observed_direction != direction &&
-            preferred_target_is_not_wall_like) {
+            discrete_primary) {
             if (active_avoidance_state_.pending_override_direction != raw_observed_direction) {
                 active_avoidance_state_.pending_override_direction = raw_observed_direction;
                 active_avoidance_state_.pending_override_ticks = 1;
@@ -654,8 +675,10 @@ AutoAvoidController::Command AutoAvoidController::decideTooCloseFront(
                 ++active_avoidance_state_.pending_override_ticks;
             }
 
-            int confirm_ticks =
-                std::max(1, config_.committed_direction_override_confirm_ticks);
+            int confirm_ticks = std::max(
+                1,
+                config_.committed_direction_override_confirm_ticks -
+                    (discrete_primary ? 1 : 0));
             if (debug.resolved_zone_override_active) {
                 confirm_ticks = std::max(1, confirm_ticks - 1);
             }
@@ -665,7 +688,7 @@ AutoAvoidController::Command AutoAvoidController::decideTooCloseFront(
                 debug.committed_direction_override_reason =
                     debug.resolved_zone_override_active ?
                         "resolved_zone_fast_switch" :
-                        "raw_zone_conflict_confirmed";
+                        "discrete_primary_conflict_confirmed";
             }
         } else {
             active_avoidance_state_.pending_override_direction = TurnDirection::Straight;
@@ -683,6 +706,7 @@ AutoAvoidController::Command AutoAvoidController::decideTooCloseFront(
     debug.resolved_zone = front_obstacle.zone;
 
     double steering_angle_deg = 0.0;
+    std::string main_steering_source = "front_avoidance_none";
     bool command_target_yaw_valid = false;
     double heading_correction_deg = 0.0;
 
@@ -697,6 +721,7 @@ AutoAvoidController::Command AutoAvoidController::decideTooCloseFront(
             command_target_yaw_deg,
             assessment.safety_front_m);
         steering_angle_deg = heading_correction_deg;
+        main_steering_source = "turning_target_yaw";
         debug.reason_code = DecisionReason::FrontAvoidanceImu;
         debug.used_imu_heading = true;
     } else {
@@ -705,8 +730,11 @@ AutoAvoidController::Command AutoAvoidController::decideTooCloseFront(
             direction,
             &front_obstacle,
             debug);
+        main_steering_source = "turning_encoder_fallback";
         debug.reason_code = DecisionReason::FrontAvoidanceEncoderFallback;
     }
+    debug.main_steering_deg = steering_angle_deg;
+    debug.main_steering_source = main_steering_source;
 
     const bool boundary_tail_blocking =
         hasCommittedAvoidanceTurn() && !tailClearanceComplete(assessment.snapshot);
@@ -718,14 +746,25 @@ AutoAvoidController::Command AutoAvoidController::decideTooCloseFront(
         0.0,
         boundary_tail_blocking);
     applyBoundaryRecoveryDebug(boundary_recovery, debug);
-    steering_angle_deg =
+    const double arbitrated_steering_angle_deg =
         boundary_recovery.adjusted_main_steering_deg +
         boundary_recovery.correction_deg;
-    steering_angle_deg = smoothSteeringAngleDeg(
-        steering_angle_deg,
+    const double smoothed_steering_angle_deg = smoothSteeringAngleDeg(
+        arbitrated_steering_angle_deg,
         avoidanceSteeringSlewDegPerTick(assessment.safety_front_m));
-    steering_angle_deg =
-        applyBoundarySteeringGuardDeg(steering_angle_deg, assessment.snapshot, &debug);
+    const double guarded_steering_angle_deg =
+        applyBoundarySteeringGuardDeg(
+            smoothed_steering_angle_deg,
+            assessment.snapshot,
+            &debug);
+    applySteeringArbitrationDebug(
+        debug.main_steering_deg,
+        debug.main_steering_source,
+        boundary_recovery,
+        smoothed_steering_angle_deg,
+        guarded_steering_angle_deg,
+        debug);
+    steering_angle_deg = guarded_steering_angle_deg;
     if (command_target_yaw_valid) {
         heading_correction_deg = steering_angle_deg;
     }
@@ -805,6 +844,7 @@ AutoAvoidController::Command AutoAvoidController::decideSectorBufferDuringActive
     debug.reason_code = DecisionReason::SectorBufferContinue;
     debug.sector_buffer_active_continue = true;
 
+    std::string main_steering_source = "sector_buffer_committed_direction";
     if (assessment.snapshot.imu_valid &&
         active_avoidance_state_.committed_target_yaw_valid &&
         std::isfinite(assessment.snapshot.yaw_deg)) {
@@ -821,8 +861,14 @@ AutoAvoidController::Command AutoAvoidController::decideSectorBufferDuringActive
                     command_target_yaw_deg,
                     assessment.safety_front_m);
         steering_angle_deg = heading_correction_deg;
+        main_steering_source =
+            clearance_hold_stage ?
+                "sector_buffer_clearance_hold_yaw" :
+                "sector_buffer_turning_yaw";
         debug.used_imu_heading = true;
     }
+    debug.main_steering_deg = steering_angle_deg;
+    debug.main_steering_source = main_steering_source;
 
     const bool boundary_tail_blocking =
         hasCommittedAvoidanceTurn() && !tailClearanceComplete(assessment.snapshot);
@@ -834,16 +880,27 @@ AutoAvoidController::Command AutoAvoidController::decideSectorBufferDuringActive
         0.0,
         boundary_tail_blocking);
     applyBoundaryRecoveryDebug(boundary_recovery, debug);
-    steering_angle_deg =
+    const double arbitrated_steering_angle_deg =
         boundary_recovery.adjusted_main_steering_deg +
         boundary_recovery.correction_deg;
-    steering_angle_deg = smoothSteeringAngleDeg(
-        steering_angle_deg,
+    const double smoothed_steering_angle_deg = smoothSteeringAngleDeg(
+        arbitrated_steering_angle_deg,
         clearance_hold_stage ?
             config_.clearance_hold_steering_slew_deg_per_tick :
             avoidanceSteeringSlewDegPerTick(assessment.safety_front_m));
-    steering_angle_deg =
-        applyBoundarySteeringGuardDeg(steering_angle_deg, assessment.snapshot, &debug);
+    const double guarded_steering_angle_deg =
+        applyBoundarySteeringGuardDeg(
+            smoothed_steering_angle_deg,
+            assessment.snapshot,
+            &debug);
+    applySteeringArbitrationDebug(
+        debug.main_steering_deg,
+        debug.main_steering_source,
+        boundary_recovery,
+        smoothed_steering_angle_deg,
+        guarded_steering_angle_deg,
+        debug);
+    steering_angle_deg = guarded_steering_angle_deg;
     if (command_target_yaw_valid) {
         heading_correction_deg = steering_angle_deg;
     }
@@ -896,6 +953,11 @@ bool AutoAvoidController::tryContinueClearanceHoldStage(
             debug);
         debug.reason_code = DecisionReason::ClearanceHoldEncoderFallback;
     }
+    debug.main_steering_deg = steering_angle_deg;
+    debug.main_steering_source =
+        command_target_yaw_valid ?
+            "clearance_hold_target_yaw" :
+            "clearance_hold_encoder_fallback";
 
     const bool boundary_tail_blocking =
         hasCommittedAvoidanceTurn() && !tailClearanceComplete(assessment.snapshot);
@@ -907,14 +969,25 @@ bool AutoAvoidController::tryContinueClearanceHoldStage(
         0.0,
         boundary_tail_blocking);
     applyBoundaryRecoveryDebug(boundary_recovery, debug);
-    steering_angle_deg =
+    const double arbitrated_steering_angle_deg =
         boundary_recovery.adjusted_main_steering_deg +
         boundary_recovery.correction_deg;
-    steering_angle_deg = smoothSteeringAngleDeg(
-        steering_angle_deg,
+    const double smoothed_steering_angle_deg = smoothSteeringAngleDeg(
+        arbitrated_steering_angle_deg,
         config_.clearance_hold_steering_slew_deg_per_tick);
-    steering_angle_deg =
-        applyBoundarySteeringGuardDeg(steering_angle_deg, assessment.snapshot, &debug);
+    const double guarded_steering_angle_deg =
+        applyBoundarySteeringGuardDeg(
+            smoothed_steering_angle_deg,
+            assessment.snapshot,
+            &debug);
+    applySteeringArbitrationDebug(
+        debug.main_steering_deg,
+        debug.main_steering_source,
+        boundary_recovery,
+        smoothed_steering_angle_deg,
+        guarded_steering_angle_deg,
+        debug);
+    steering_angle_deg = guarded_steering_angle_deg;
     if (command_target_yaw_valid) {
         heading_correction_deg = steering_angle_deg;
     }
@@ -1282,6 +1355,8 @@ bool AutoAvoidController::tryContinueReturnHeadingStage(
     debug.path_recovery_ready = path_recovery_ready;
     debug.path_recovery_settled = path_recovery_settled;
     debug.exit_to_idle_ready = exit_to_idle_ready;
+    debug.main_steering_deg = combined_return_correction_deg;
+    debug.main_steering_source = "return_to_path_combined";
 
     if (debug.exit_to_idle_ready) {
         return false;
@@ -1295,12 +1370,25 @@ bool AutoAvoidController::tryContinueReturnHeadingStage(
         path_recovery_correction_deg,
         tail_clearance_blocking);
     applyBoundaryRecoveryDebug(boundary_recovery, debug);
-    double steering_angle_deg = smoothSteeringAngleDeg(
+    const double arbitrated_steering_angle_deg =
         boundary_recovery.adjusted_main_steering_deg +
-            boundary_recovery.correction_deg,
+            boundary_recovery.correction_deg;
+    const double smoothed_steering_angle_deg = smoothSteeringAngleDeg(
+        arbitrated_steering_angle_deg,
         config_.return_heading_steering_slew_deg_per_tick);
-    steering_angle_deg =
-        applyBoundarySteeringGuardDeg(steering_angle_deg, assessment.snapshot, &debug);
+    const double guarded_steering_angle_deg =
+        applyBoundarySteeringGuardDeg(
+            smoothed_steering_angle_deg,
+            assessment.snapshot,
+            &debug);
+    applySteeringArbitrationDebug(
+        debug.main_steering_deg,
+        debug.main_steering_source,
+        boundary_recovery,
+        smoothed_steering_angle_deg,
+        guarded_steering_angle_deg,
+        debug);
+    const double steering_angle_deg = guarded_steering_angle_deg;
     debug.used_imu_heading =
         assessment.snapshot.imu_valid && std::abs(steering_angle_deg) > 0.001;
     rememberDriveSpeed(speed_cm_s);
@@ -1347,6 +1435,11 @@ AutoAvoidController::Command AutoAvoidController::decideStraightDrive(
         assessment,
         config_.lateral_balance_max_correction_deg,
         debug);
+    debug.main_steering_deg = heading_correction_deg;
+    debug.main_steering_source =
+        debug.lateral_balance_active ?
+            "straight_heading_plus_balance" :
+            "straight_heading";
     const auto boundary_recovery = boundaryRecoveryDecision(
         assessment,
         active_avoidance_state_.stage,
@@ -1355,14 +1448,25 @@ AutoAvoidController::Command AutoAvoidController::decideStraightDrive(
         0.0,
         false);
     applyBoundaryRecoveryDebug(boundary_recovery, debug);
-    heading_correction_deg =
+    const double arbitrated_steering_angle_deg =
         boundary_recovery.adjusted_main_steering_deg +
         boundary_recovery.correction_deg;
-    double steering_angle_deg = smoothSteeringAngleDeg(
-        heading_correction_deg,
+    const double smoothed_steering_angle_deg = smoothSteeringAngleDeg(
+        arbitrated_steering_angle_deg,
         config_.straight_steering_slew_deg_per_tick);
-    steering_angle_deg =
-        applyBoundarySteeringGuardDeg(steering_angle_deg, assessment.snapshot, &debug);
+    const double guarded_steering_angle_deg =
+        applyBoundarySteeringGuardDeg(
+            smoothed_steering_angle_deg,
+            assessment.snapshot,
+            &debug);
+    applySteeringArbitrationDebug(
+        debug.main_steering_deg,
+        debug.main_steering_source,
+        boundary_recovery,
+        smoothed_steering_angle_deg,
+        guarded_steering_angle_deg,
+        debug);
+    const double steering_angle_deg = guarded_steering_angle_deg;
     heading_correction_deg = steering_angle_deg;
     debug.state = active_avoidance_state_.stage;
     debug.direction = TurnDirection::Straight;
@@ -1577,25 +1681,122 @@ bool AutoAvoidController::shouldReplanFrontDuringActiveAvoidance(
         return false;
     }
 
-    double replan_distance_m = std::max(
-        config_.avoidance_turn_max_distance_m,
-        config_.active_stage_front_replan_distance_m);
+    const bool discrete_primary = frontTargetIsDiscretePrimary(snapshot);
+    const bool wall_constraint = frontTargetIsWallConstraint(snapshot);
+    double replan_distance_m =
+        discrete_primary ?
+            std::max(
+                config_.avoidance_turn_max_distance_m,
+                config_.active_stage_front_replan_distance_m) :
+            std::max(
+                config_.avoidance_turn_max_distance_m,
+                config_.active_stage_wall_replan_distance_m);
     if (active_avoidance_state_.stage == AvoidanceStage::ReturnHeading &&
         active_avoidance_state_.return_heading_ticks <
-            std::max(0, config_.return_heading_min_hold_ticks)) {
-        replan_distance_m = config_.avoidance_turn_max_distance_m;
+            std::max(0, config_.return_heading_min_hold_ticks) &&
+        !discrete_primary) {
+        replan_distance_m = std::max(
+            config_.avoidance_turn_max_distance_m,
+            config_.active_stage_wall_replan_distance_m);
     }
 
     if (snapshot.front.nearest_m > replan_distance_m) {
         return false;
     }
 
-    if (std::abs(front_obstacle.angle_deg) <=
-        std::max(0.0, config_.active_stage_front_replan_center_half_width_deg)) {
+    const double center_half_width_deg =
+        discrete_primary ?
+            std::max(0.0, config_.active_stage_front_replan_center_half_width_deg) :
+            std::max(0.0, config_.active_stage_wall_replan_center_half_width_deg);
+    if (std::abs(front_obstacle.angle_deg) <= center_half_width_deg) {
         return true;
     }
 
-    return front_obstacle.zone == Judgment::FrontObstacleZone::Center;
+    if (front_obstacle.zone == Judgment::FrontObstacleZone::Center) {
+        return true;
+    }
+
+    if (wall_constraint) {
+        return snapshot.front.nearest_m <=
+            std::max(config_.avoidance_turn_max_distance_m, config_.emergency_stop_release_distance_m);
+    }
+
+    return discrete_primary;
+}
+
+AutoAvoidController::ActiveStagePriorityDecision
+AutoAvoidController::evaluateActiveStagePriority(
+    const SnapshotAssessment& assessment,
+    const Judgment::FrontObstacleResult& front_obstacle) const {
+    ActiveStagePriorityDecision decision;
+    if (active_avoidance_state_.stage != AvoidanceStage::ClearanceHold &&
+        active_avoidance_state_.stage != AvoidanceStage::ReturnHeading) {
+        return decision;
+    }
+
+    decision.continue_active_stage = true;
+    decision.protection_active = true;
+    decision.priority_mode =
+        active_avoidance_state_.stage == AvoidanceStage::ClearanceHold ?
+            "clearance_hold_priority_window" :
+            "return_to_path_priority_window";
+
+    const bool discrete_primary = frontTargetIsDiscretePrimary(assessment.snapshot);
+    const bool wall_constraint = frontTargetIsWallConstraint(assessment.snapshot);
+    if (shouldReplanFrontDuringActiveAvoidance(assessment.snapshot, front_obstacle)) {
+        decision.continue_active_stage = false;
+        decision.protection_active = false;
+        decision.replan_override_active = true;
+        decision.priority_mode = "replan_override";
+        if (discrete_primary) {
+            decision.replan_override_reason =
+                front_obstacle.zone == Judgment::FrontObstacleZone::Center ?
+                    "discrete_primary_center_replan" :
+                    "discrete_primary_conflict_replan";
+        } else if (wall_constraint) {
+            decision.replan_override_reason = "wall_constraint_too_close";
+        } else {
+            decision.replan_override_reason = "front_replan_trigger";
+        }
+        return decision;
+    }
+
+    if (wall_constraint) {
+        decision.protection_reason = "wall_constraint_deferred_to_boundary";
+    } else if (assessment.front_distance_valid &&
+        assessment.safety_front_m <=
+            std::max(config_.avoidance_turn_max_distance_m, config_.avoidance_release_distance_m)) {
+        decision.protection_reason =
+            active_avoidance_state_.stage == AvoidanceStage::ClearanceHold ?
+                "clearance_hold_jitter_filtered" :
+                "return_to_path_jitter_filtered";
+    } else {
+        decision.protection_reason = "active_stage_continuation";
+    }
+    return decision;
+}
+
+void AutoAvoidController::applyActiveStagePriorityDebug(
+    const ActiveStagePriorityDecision& decision,
+    DebugInfo& debug) const {
+    if (!decision.priority_mode.empty()) {
+        debug.active_stage_priority_mode = decision.priority_mode;
+    }
+    debug.replan_override_active = decision.replan_override_active;
+    debug.replan_override_reason = decision.replan_override_reason;
+    debug.active_stage_protection_active = decision.protection_active;
+    debug.active_stage_protection_reason = decision.protection_reason;
+}
+
+bool AutoAvoidController::frontTargetIsDiscretePrimary(
+    const SensorSnapshot& snapshot) const {
+    return snapshot.front_target_selection.selected_front_cluster_is_discrete_primary ||
+        snapshot.front_target_selection.front_target_role == kFrontTargetRoleDiscretePrimary;
+}
+
+bool AutoAvoidController::frontTargetIsWallConstraint(
+    const SensorSnapshot& snapshot) const {
+    return snapshot.front_target_selection.front_target_role == kFrontTargetRoleWallConstraint;
 }
 
 void AutoAvoidController::resetAvoidanceState() {
@@ -1824,7 +2025,9 @@ bool AutoAvoidController::frontClearEnoughForPathRecovery(
     return snapshot.front.valid &&
         std::isfinite(snapshot.front.nearest_m) &&
         snapshot.front.nearest_m >=
-            std::max(config_.avoidance_release_distance_m, config_.medium_speed_min_distance_m);
+            std::max(
+                config_.return_to_path_front_clear_distance_m,
+                config_.emergency_stop_release_distance_m);
 }
 
 bool AutoAvoidController::tailClearanceComplete(
@@ -2438,6 +2641,28 @@ void AutoAvoidController::applyBoundaryRecoveryDebug(
     debug.boundary_recovery_and_path_conflict = decision.conflict_with_path;
 }
 
+void AutoAvoidController::applySteeringArbitrationDebug(
+    double main_steering_deg,
+    const std::string& main_steering_source,
+    const BoundaryRecoveryDecision& boundary_recovery,
+    double smoothed_steering_deg,
+    double guarded_steering_deg,
+    DebugInfo& debug) const {
+    debug.main_steering_deg = main_steering_deg;
+    debug.main_steering_source = main_steering_source;
+    debug.boundary_override_applied = boundary_recovery.reduced_main_steering;
+    debug.boundary_override_delta_deg =
+        boundary_recovery.reduced_main_steering ?
+            boundary_recovery.reduced_by_deg :
+            0.0;
+    debug.boundary_recovery_applied =
+        std::abs(boundary_recovery.correction_deg) > 0.05;
+    debug.boundary_recovery_delta_deg =
+        debug.boundary_recovery_applied ? boundary_recovery.correction_deg : 0.0;
+    debug.smoothed_steering_deg = smoothed_steering_deg;
+    debug.guarded_steering_deg = guarded_steering_deg;
+}
+
 double AutoAvoidController::avoidanceSteeringSlewDegPerTick(
     double front_nearest_m) const {
     const double ratio = normalizedAvoidanceDistanceRatio(front_nearest_m);
@@ -2552,18 +2777,129 @@ double AutoAvoidController::applyBoundarySteeringGuardDeg(
 }
 
 AutoAvoidController::TurnDirection AutoAvoidController::chooseCenterTurnDirection(
-    const SensorSnapshot& snapshot) const {
-    if (!snapshot.negative_front.valid || !snapshot.positive_front.valid) {
-        return TurnDirection::Right;
+    const SnapshotAssessment& assessment,
+    DebugInfo* debug) {
+    const bool left_valid =
+        assessment.snapshot.negative_front.valid &&
+        std::isfinite(assessment.snapshot.negative_front.nearest_m);
+    const bool right_valid =
+        assessment.snapshot.positive_front.valid &&
+        std::isfinite(assessment.snapshot.positive_front.nearest_m);
+    const double left_distance_m =
+        left_valid ? assessment.snapshot.negative_front.nearest_m : 0.0;
+    const double right_distance_m =
+        right_valid ? assessment.snapshot.positive_front.nearest_m : 0.0;
+    const double distance_delta_m = left_distance_m - right_distance_m;
+    const bool ambiguous_side_delta =
+        left_valid &&
+        right_valid &&
+        std::abs(distance_delta_m) <
+            std::max(0.0, config_.center_turn_min_side_distance_delta_m);
+
+    auto record_decision =
+        [debug](const std::string& mode,
+            bool bias_removed,
+            const std::string& reason) {
+            if (!debug) {
+                return;
+            }
+            debug->center_turn_decision_mode = mode;
+            debug->center_turn_bias_removed = bias_removed;
+            debug->center_turn_decision_reason = reason;
+        };
+
+    if (left_valid && right_valid &&
+        std::abs(distance_delta_m) >=
+            std::max(0.0, config_.center_turn_min_side_distance_delta_m)) {
+        const TurnDirection direction =
+            distance_delta_m > 0.0 ? TurnDirection::Left : TurnDirection::Right;
+        record_decision(
+            "side_distance_margin",
+            false,
+            distance_delta_m > 0.0 ?
+                "left_side_clearer_than_right" :
+                "right_side_clearer_than_left");
+        return direction;
     }
 
-    if (snapshot.negative_front.nearest_m > snapshot.positive_front.nearest_m) {
-        return TurnDirection::Left;
+    const double left_risk = boundaryRiskFromDistanceM(assessment.safety_negative_front_m);
+    const double right_risk = boundaryRiskFromDistanceM(assessment.safety_positive_front_m);
+    const double risk_delta = right_risk - left_risk;
+    if (std::isfinite(risk_delta) &&
+        std::abs(risk_delta) >=
+            std::max(0.0, config_.center_turn_boundary_risk_delta)) {
+        const TurnDirection direction =
+            risk_delta > 0.0 ? TurnDirection::Left : TurnDirection::Right;
+        record_decision(
+            "boundary_risk_bias",
+            true,
+            risk_delta > 0.0 ?
+                "right_boundary_risk_higher" :
+                "left_boundary_risk_higher");
+        return direction;
     }
-    if (snapshot.positive_front.nearest_m > snapshot.negative_front.nearest_m) {
-        return TurnDirection::Right;
+
+    if (path_reference_state_.valid &&
+        std::abs(path_reference_state_.reference_side_balance) >=
+            std::max(0.0, config_.center_turn_reference_balance_bias_m)) {
+        const TurnDirection direction =
+            path_reference_state_.reference_side_balance > 0.0 ?
+                TurnDirection::Right :
+                TurnDirection::Left;
+        record_decision(
+            "path_reference_bias",
+            true,
+            path_reference_state_.reference_side_balance > 0.0 ?
+                "reference_balance_prefers_right" :
+                "reference_balance_prefers_left");
+        return direction;
     }
-    return TurnDirection::Right;
+
+    if (isStableObstacleZone(obstacle_zone_state_.stable_zone) &&
+        obstacle_zone_state_.stable_zone != Judgment::FrontObstacleZone::Center) {
+        const TurnDirection direction =
+            turnDirectionForObstacleZone(obstacle_zone_state_.stable_zone);
+        if (isTurningDirection(direction)) {
+            record_decision(
+                "stable_zone_trend",
+                true,
+                std::string("stable_zone_") +
+                    Judgment::frontObstacleZoneName(obstacle_zone_state_.stable_zone));
+            return direction;
+        }
+    }
+
+    if (left_valid != right_valid) {
+        const bool known_side_tight =
+            (left_valid ? left_distance_m : right_distance_m) <=
+            std::max(
+                config_.avoidance_turn_max_distance_m,
+                config_.avoidance_release_distance_m);
+        if (known_side_tight) {
+            const TurnDirection direction =
+                left_valid ? TurnDirection::Right : TurnDirection::Left;
+            record_decision(
+                "single_side_close_opposite",
+                true,
+                left_valid ?
+                    "left_side_close_choose_right" :
+                    "right_side_close_choose_left");
+            return direction;
+        }
+    }
+
+    const TurnDirection tie_break_direction = center_turn_tie_break_direction_;
+    center_turn_tie_break_direction_ =
+        tie_break_direction == TurnDirection::Left ?
+            TurnDirection::Right :
+            TurnDirection::Left;
+    record_decision(
+        ambiguous_side_delta ? "alternating_tie_break" : "insufficient_side_data_tie_break",
+        true,
+        tie_break_direction == TurnDirection::Left ?
+            "bias_removed_choose_left" :
+            "bias_removed_choose_right");
+    return tie_break_direction;
 }
 
 std::string AutoAvoidController::formatDebugText(const DebugInfo& debug) const {
@@ -2608,6 +2944,21 @@ std::string AutoAvoidController::formatDebugText(const DebugInfo& debug) const {
         }
         if (debug.front_target_selection.wall_like_cluster_suppressed) {
             out << ", wall_like_suppressed=1";
+        }
+        if (!debug.front_target_selection.front_target_role.empty()) {
+            out << ", target_role=" << debug.front_target_selection.front_target_role;
+        }
+        if (debug.front_target_selection.selected_front_cluster_is_discrete_primary) {
+            out << ", discrete_primary=1";
+        }
+        if (debug.front_target_selection.selected_front_cluster_is_wall_like) {
+            out << ", wall_constraint=1";
+        }
+        if (debug.front_target_selection.raw_zone_from_discrete_target) {
+            out << ", zone_from_discrete=1";
+        }
+        if (debug.front_target_selection.wall_like_suppressed_from_zone) {
+            out << ", wall_zone_suppressed=1";
         }
         if (!debug.front_target_selection.front_target_selection_reason.empty()) {
             out << ", target_reason="
@@ -2660,8 +3011,25 @@ std::string AutoAvoidController::formatDebugText(const DebugInfo& debug) const {
     if (debug.replan_triggered) {
         out << ", replan=1";
     }
+    if (!debug.active_stage_priority_mode.empty()) {
+        out << ", stage_priority=" << debug.active_stage_priority_mode;
+    }
+    if (debug.active_stage_protection_active &&
+        !debug.active_stage_protection_reason.empty()) {
+        out << ", stage_protect=" << debug.active_stage_protection_reason;
+    }
+    if (debug.replan_override_active &&
+        !debug.replan_override_reason.empty()) {
+        out << ", replan_override=" << debug.replan_override_reason;
+    }
     if (debug.return_heading_protected) {
         out << ", return_protected=" << debug.return_heading_protect_ticks_remaining;
+    }
+    if (!debug.center_turn_decision_mode.empty()) {
+        out << ", center_turn=" << debug.center_turn_decision_mode;
+        if (!debug.center_turn_decision_reason.empty()) {
+            out << "/" << debug.center_turn_decision_reason;
+        }
     }
     if (debug.lateral_balance_active) {
         out << ", balance=" << format_number(debug.lateral_balance_correction_deg, 2);
@@ -2691,6 +3059,22 @@ std::string AutoAvoidController::formatDebugText(const DebugInfo& debug) const {
     if (debug.wall_constraint_active) {
         out << ", wall_constraint=" << debug.wall_constraint_side
             << ":" << format_number(debug.wall_constraint_correction_deg, 2);
+    }
+    if (!debug.main_steering_source.empty()) {
+        out << ", steering_chain=main:"
+            << format_number(debug.main_steering_deg, 2)
+            << "@"
+            << debug.main_steering_source
+            << "/override:"
+            << format_number(debug.boundary_override_delta_deg, 2)
+            << "/recovery:"
+            << format_number(debug.boundary_recovery_delta_deg, 2)
+            << "/smooth:"
+            << format_number(debug.smoothed_steering_deg, 2)
+            << "/guard:"
+            << format_number(debug.guarded_steering_deg, 2)
+            << "/enc:"
+            << debug.final_encoder_command;
     }
     if (debug.path_reference_valid) {
         out << ", ref_yaw=" << format_number(debug.reference_yaw_deg, 1)
@@ -2810,6 +3194,7 @@ AutoAvoidController::Command AutoAvoidController::driveCommand(
     debug.state = active_avoidance_state_.stage;
     debug.direction = direction;
     debug.safety_fallback = false;
+    debug.final_encoder_command = steering_encoder;
     if (imu_heading_used) {
         debug.used_imu_heading = true;
     }
@@ -2845,6 +3230,7 @@ AutoAvoidController::Command AutoAvoidController::stopCommand(DebugInfo debug) c
     command.steering_angle_deg = 0.0;
     debug.state = active_avoidance_state_.stage;
     debug.direction = TurnDirection::Stop;
+    debug.final_encoder_command = 0;
     command.reason_code = debug.reason_code;
     command.fallback_reason = debug.fallback_reason;
     command.debug = debug;
