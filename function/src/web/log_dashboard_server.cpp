@@ -224,7 +224,13 @@ void appendAutoAvoidCycleTraceCsv(const std::string& line) {
             << "boundary_stop,emergency_stop,replan_triggered,return_heading_protected,"
             << "return_heading_protect_ticks_remaining,lateral_balance_active,"
             << "lateral_balance_correction_deg,wall_constraint_active,wall_constraint_side,"
-            << "wall_constraint_correction_deg,path_reference_valid,"
+            << "wall_constraint_correction_deg,boundary_recovery_active,boundary_recovery_side,"
+            << "boundary_recovery_level,boundary_recovery_correction_deg,"
+            << "boundary_recovery_limited_by_tail,boundary_override_active,"
+            << "boundary_override_reason,boundary_override_reduced_main_steering,"
+            << "boundary_override_reduced_by_deg,boundary_risk_left,boundary_risk_right,"
+            << "boundary_risk_delta,boundary_recovery_and_path_aligned,"
+            << "boundary_recovery_and_path_conflict,path_reference_valid,"
             << "reference_yaw_deg,reference_side_balance,reference_left_distance_m,"
             << "reference_right_distance_m,path_reference_captured_ms,path_reference_captured_stage,"
             << "path_reference_captured_this_cycle,path_reference_clear_reason,"
@@ -2164,6 +2170,24 @@ void LogDashboardServer::runAutoAvoidControlLoop() {
             << csvBool(command.debug.wall_constraint_active) << ","
             << csvField(command.debug.wall_constraint_side) << ","
             << csvNumber(command.debug.wall_constraint_correction_deg, 3) << ","
+            << csvBool(command.debug.boundary_recovery_active) << ","
+            << csvField(
+                   AutoAvoidController::boundaryRiskSideName(
+                       command.debug.boundary_recovery_side)) << ","
+            << csvField(
+                   AutoAvoidController::boundaryRecoveryLevelName(
+                       command.debug.boundary_recovery_level)) << ","
+            << csvNumber(command.debug.boundary_recovery_correction_deg, 3) << ","
+            << csvBool(command.debug.boundary_recovery_limited_by_tail) << ","
+            << csvBool(command.debug.boundary_override_active) << ","
+            << csvField(command.debug.boundary_override_reason) << ","
+            << csvBool(command.debug.boundary_override_reduced_main_steering) << ","
+            << csvNumber(command.debug.boundary_override_reduced_by_deg, 3) << ","
+            << csvNumber(command.debug.boundary_risk_left, 3) << ","
+            << csvNumber(command.debug.boundary_risk_right, 3) << ","
+            << csvNumber(command.debug.boundary_risk_delta, 3) << ","
+            << csvBool(command.debug.boundary_recovery_and_path_aligned) << ","
+            << csvBool(command.debug.boundary_recovery_and_path_conflict) << ","
             << csvBool(command.debug.path_reference_valid) << ","
             << csvNumber(command.debug.reference_yaw_deg, 3) << ","
             << csvNumber(command.debug.reference_side_balance, 3) << ","
@@ -2883,6 +2907,36 @@ std::string LogDashboardServer::stateJson() const {
                 auto_avoid_runtime_state.last_decision.debug.wall_constraint_side) << "\","
         << "\"wall_constraint_correction_deg\":" <<
                 numberJson(auto_avoid_runtime_state.last_decision.debug.wall_constraint_correction_deg, 2) << ","
+        << "\"boundary_recovery_active\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.boundary_recovery_active) << ","
+        << "\"boundary_recovery_side\":\"" << jsonEscape(
+                AutoAvoidController::boundaryRiskSideName(
+                    auto_avoid_runtime_state.last_decision.debug.boundary_recovery_side)) << "\","
+        << "\"boundary_recovery_level\":\"" << jsonEscape(
+                AutoAvoidController::boundaryRecoveryLevelName(
+                    auto_avoid_runtime_state.last_decision.debug.boundary_recovery_level)) << "\","
+        << "\"boundary_recovery_correction_deg\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.boundary_recovery_correction_deg, 2) << ","
+        << "\"boundary_recovery_limited_by_tail\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.boundary_recovery_limited_by_tail) << ","
+        << "\"boundary_override_active\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.boundary_override_active) << ","
+        << "\"boundary_override_reason\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.boundary_override_reason) << "\","
+        << "\"boundary_override_reduced_main_steering\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.boundary_override_reduced_main_steering) << ","
+        << "\"boundary_override_reduced_by_deg\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.boundary_override_reduced_by_deg, 2) << ","
+        << "\"boundary_risk_left\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.boundary_risk_left, 2) << ","
+        << "\"boundary_risk_right\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.boundary_risk_right, 2) << ","
+        << "\"boundary_risk_delta\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.boundary_risk_delta, 2) << ","
+        << "\"boundary_recovery_and_path_aligned\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.boundary_recovery_and_path_aligned) << ","
+        << "\"boundary_recovery_and_path_conflict\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.boundary_recovery_and_path_conflict) << ","
         << "\"path_reference_valid\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.path_reference_valid) << ","
         << "\"reference_yaw_deg\":" << (

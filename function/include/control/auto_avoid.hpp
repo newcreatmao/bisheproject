@@ -116,6 +116,19 @@ public:
         ControllerReset
     };
 
+    enum class BoundaryRiskSide {
+        None,
+        Left,
+        Right
+    };
+
+    enum class BoundaryRecoveryLevel {
+        None,
+        Soft,
+        Strong,
+        Critical
+    };
+
     struct AutoAvoidConfig {
         int cruise_speed_cm_s = 50;
         int caution_speed_cm_s = 40;
@@ -161,6 +174,17 @@ public:
         double lateral_balance_min_side_distance_m = 0.75;
         double lateral_balance_gain_deg_per_m = 5.0;
         double lateral_balance_max_correction_deg = 1.8;
+        double boundary_recovery_soft_margin_m = 0.32;
+        double boundary_recovery_strong_margin_m = 0.18;
+        double boundary_recovery_critical_margin_m = 0.08;
+        double boundary_recovery_max_correction_deg = 4.2;
+        double boundary_recovery_straight_weight = 1.00;
+        double boundary_recovery_turning_weight = 0.40;
+        double boundary_recovery_clearance_hold_weight = 0.55;
+        double boundary_recovery_return_to_path_weight = 0.90;
+        double boundary_recovery_tail_limit_weight = 0.45;
+        double boundary_override_activation_risk = 0.32;
+        double boundary_override_max_reduction_ratio = 0.85;
         double return_to_path_balance_gain_deg_per_m = 6.0;
         double return_to_path_balance_max_correction_deg = 2.8;
         double return_to_path_balance_tolerance_m = 0.18;
@@ -221,6 +245,20 @@ public:
         bool wall_constraint_active = false;
         std::string wall_constraint_side;
         double wall_constraint_correction_deg = 0.0;
+        bool boundary_recovery_active = false;
+        BoundaryRiskSide boundary_recovery_side = BoundaryRiskSide::None;
+        BoundaryRecoveryLevel boundary_recovery_level = BoundaryRecoveryLevel::None;
+        double boundary_recovery_correction_deg = 0.0;
+        bool boundary_recovery_limited_by_tail = false;
+        bool boundary_override_active = false;
+        std::string boundary_override_reason;
+        bool boundary_override_reduced_main_steering = false;
+        double boundary_override_reduced_by_deg = 0.0;
+        double boundary_risk_left = 0.0;
+        double boundary_risk_right = 0.0;
+        double boundary_risk_delta = 0.0;
+        bool boundary_recovery_and_path_aligned = false;
+        bool boundary_recovery_and_path_conflict = false;
         bool path_reference_valid = false;
         double reference_yaw_deg = 0.0;
         double reference_side_balance = 0.0;
@@ -288,6 +326,8 @@ public:
     static const char* encoderFallbackKindName(EncoderFallbackKind kind);
     static const char* pathReferenceClearReasonName(PathReferenceClearReason reason);
     static const char* targetYawClearReasonName(TargetYawClearReason reason);
+    static const char* boundaryRiskSideName(BoundaryRiskSide side);
+    static const char* boundaryRecoveryLevelName(BoundaryRecoveryLevel level);
 
 private:
     struct SnapshotAssessment {
@@ -376,6 +416,24 @@ private:
         bool stabilized = false;
         bool override_active = false;
         std::string override_reason;
+    };
+
+    struct BoundaryRecoveryDecision {
+        BoundaryRiskSide side = BoundaryRiskSide::None;
+        BoundaryRecoveryLevel level = BoundaryRecoveryLevel::None;
+        double left_risk = 0.0;
+        double right_risk = 0.0;
+        double risk_delta = 0.0;
+        bool active = false;
+        bool limited_by_tail = false;
+        bool override_active = false;
+        std::string override_reason;
+        bool reduced_main_steering = false;
+        double reduced_by_deg = 0.0;
+        double adjusted_main_steering_deg = 0.0;
+        double correction_deg = 0.0;
+        bool aligned_with_path = false;
+        bool conflict_with_path = false;
     };
 
     SensorSnapshot normalizedSnapshot(const SensorSnapshot& snapshot) const;
@@ -469,6 +527,25 @@ private:
     double lateralBalanceCorrectionDeg(
         const SnapshotAssessment& assessment,
         double max_correction_deg,
+        DebugInfo& debug) const;
+    double boundaryRiskFromDistanceM(double distance_m) const;
+    BoundaryRecoveryLevel boundaryRecoveryLevelForDistanceM(double distance_m) const;
+    double boundaryRecoveryStageWeight(AvoidanceStage stage) const;
+    bool directionTowardBoundary(
+        TurnDirection direction,
+        BoundaryRiskSide boundary_side) const;
+    bool steeringTowardBoundary(
+        double steering_angle_deg,
+        BoundaryRiskSide boundary_side) const;
+    BoundaryRecoveryDecision boundaryRecoveryDecision(
+        const SnapshotAssessment& assessment,
+        AvoidanceStage stage,
+        TurnDirection direction,
+        double main_steering_angle_deg,
+        double path_recovery_correction_deg,
+        bool tail_clearance_blocking) const;
+    void applyBoundaryRecoveryDebug(
+        const BoundaryRecoveryDecision& decision,
         DebugInfo& debug) const;
     double sideBalanceFromAssessment(const SnapshotAssessment& assessment) const;
     bool frontClearEnoughForPathRecovery(const SensorSnapshot& snapshot) const;

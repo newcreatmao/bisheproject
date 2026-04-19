@@ -66,6 +66,25 @@ bool isFrontZoneBuffer(
         Judgment::isFrontObstacleZoneBufferAngle(front_obstacle.angle_deg);
 }
 
+bool isBoundaryRiskSide(AutoAvoidController::BoundaryRiskSide side) {
+    return side == AutoAvoidController::BoundaryRiskSide::Left ||
+        side == AutoAvoidController::BoundaryRiskSide::Right;
+}
+
+double steeringAngleForBoundarySide(
+    AutoAvoidController::BoundaryRiskSide side,
+    double magnitude_deg) {
+    switch (side) {
+        case AutoAvoidController::BoundaryRiskSide::Left:
+            return std::abs(magnitude_deg);
+        case AutoAvoidController::BoundaryRiskSide::Right:
+            return -std::abs(magnitude_deg);
+        case AutoAvoidController::BoundaryRiskSide::None:
+        default:
+            return 0.0;
+    }
+}
+
 }  // namespace
 
 AutoAvoidController::AutoAvoidController()
@@ -226,6 +245,32 @@ const char* AutoAvoidController::targetYawClearReasonName(TargetYawClearReason r
         case TargetYawClearReason::ControllerReset:
             return "controller_reset";
         case TargetYawClearReason::None:
+        default:
+            return "none";
+    }
+}
+
+const char* AutoAvoidController::boundaryRiskSideName(BoundaryRiskSide side) {
+    switch (side) {
+        case BoundaryRiskSide::Left:
+            return "left";
+        case BoundaryRiskSide::Right:
+            return "right";
+        case BoundaryRiskSide::None:
+        default:
+            return "none";
+    }
+}
+
+const char* AutoAvoidController::boundaryRecoveryLevelName(BoundaryRecoveryLevel level) {
+    switch (level) {
+        case BoundaryRecoveryLevel::Soft:
+            return "soft";
+        case BoundaryRecoveryLevel::Strong:
+            return "strong";
+        case BoundaryRecoveryLevel::Critical:
+            return "critical";
+        case BoundaryRecoveryLevel::None:
         default:
             return "none";
     }
@@ -663,6 +708,19 @@ AutoAvoidController::Command AutoAvoidController::decideTooCloseFront(
         debug.reason_code = DecisionReason::FrontAvoidanceEncoderFallback;
     }
 
+    const bool boundary_tail_blocking =
+        hasCommittedAvoidanceTurn() && !tailClearanceComplete(assessment.snapshot);
+    const auto boundary_recovery = boundaryRecoveryDecision(
+        assessment,
+        active_avoidance_state_.stage,
+        direction,
+        steering_angle_deg,
+        0.0,
+        boundary_tail_blocking);
+    applyBoundaryRecoveryDebug(boundary_recovery, debug);
+    steering_angle_deg =
+        boundary_recovery.adjusted_main_steering_deg +
+        boundary_recovery.correction_deg;
     steering_angle_deg = smoothSteeringAngleDeg(
         steering_angle_deg,
         avoidanceSteeringSlewDegPerTick(assessment.safety_front_m));
@@ -764,6 +822,19 @@ AutoAvoidController::Command AutoAvoidController::decideSectorBufferDuringActive
         debug.used_imu_heading = true;
     }
 
+    const bool boundary_tail_blocking =
+        hasCommittedAvoidanceTurn() && !tailClearanceComplete(assessment.snapshot);
+    const auto boundary_recovery = boundaryRecoveryDecision(
+        assessment,
+        active_avoidance_state_.stage,
+        active_avoidance_state_.committed_direction,
+        steering_angle_deg,
+        0.0,
+        boundary_tail_blocking);
+    applyBoundaryRecoveryDebug(boundary_recovery, debug);
+    steering_angle_deg =
+        boundary_recovery.adjusted_main_steering_deg +
+        boundary_recovery.correction_deg;
     steering_angle_deg = smoothSteeringAngleDeg(
         steering_angle_deg,
         clearance_hold_stage ?
@@ -824,6 +895,19 @@ bool AutoAvoidController::tryContinueClearanceHoldStage(
         debug.reason_code = DecisionReason::ClearanceHoldEncoderFallback;
     }
 
+    const bool boundary_tail_blocking =
+        hasCommittedAvoidanceTurn() && !tailClearanceComplete(assessment.snapshot);
+    const auto boundary_recovery = boundaryRecoveryDecision(
+        assessment,
+        active_avoidance_state_.stage,
+        active_avoidance_state_.committed_direction,
+        steering_angle_deg,
+        0.0,
+        boundary_tail_blocking);
+    applyBoundaryRecoveryDebug(boundary_recovery, debug);
+    steering_angle_deg =
+        boundary_recovery.adjusted_main_steering_deg +
+        boundary_recovery.correction_deg;
     steering_angle_deg = smoothSteeringAngleDeg(
         steering_angle_deg,
         config_.clearance_hold_steering_slew_deg_per_tick);
@@ -952,14 +1036,22 @@ bool AutoAvoidController::tryContinueReturnHeadingStage(
         return false;
     }
 
-    double steering_angle_deg = smoothSteeringAngleDeg(
+    const auto boundary_recovery = boundaryRecoveryDecision(
+        assessment,
+        active_avoidance_state_.stage,
+        TurnDirection::Straight,
         combined_return_correction_deg,
+        path_recovery_correction_deg,
+        tail_clearance_blocking);
+    applyBoundaryRecoveryDebug(boundary_recovery, debug);
+    double steering_angle_deg = smoothSteeringAngleDeg(
+        boundary_recovery.adjusted_main_steering_deg +
+            boundary_recovery.correction_deg,
         config_.return_heading_steering_slew_deg_per_tick);
     steering_angle_deg =
         applyBoundarySteeringGuardDeg(steering_angle_deg, assessment.snapshot, &debug);
-    combined_return_correction_deg = steering_angle_deg;
     debug.used_imu_heading =
-        assessment.snapshot.imu_valid && std::abs(combined_return_correction_deg) > 0.001;
+        assessment.snapshot.imu_valid && std::abs(steering_angle_deg) > 0.001;
     rememberDriveSpeed(speed_cm_s);
     command = driveCommand(
         TurnDirection::Straight,
@@ -967,7 +1059,7 @@ bool AutoAvoidController::tryContinueReturnHeadingStage(
         steering_angle_deg,
         assessment.snapshot,
         std::isfinite(reference_yaw_deg),
-        combined_return_correction_deg,
+        steering_angle_deg,
         debug);
     ++active_avoidance_state_.return_heading_ticks;
     return true;
@@ -1004,6 +1096,17 @@ AutoAvoidController::Command AutoAvoidController::decideStraightDrive(
         assessment,
         config_.lateral_balance_max_correction_deg,
         debug);
+    const auto boundary_recovery = boundaryRecoveryDecision(
+        assessment,
+        active_avoidance_state_.stage,
+        TurnDirection::Straight,
+        heading_correction_deg,
+        0.0,
+        false);
+    applyBoundaryRecoveryDebug(boundary_recovery, debug);
+    heading_correction_deg =
+        boundary_recovery.adjusted_main_steering_deg +
+        boundary_recovery.correction_deg;
     double steering_angle_deg = smoothSteeringAngleDeg(
         heading_correction_deg,
         config_.straight_steering_slew_deg_per_tick);
@@ -1523,9 +1626,6 @@ double AutoAvoidController::pathRecoveryCorrectionDeg(
 
     debug.lateral_balance_active = true;
     debug.lateral_balance_correction_deg = correction_deg;
-    debug.wall_constraint_active = true;
-    debug.wall_constraint_side = balance_error_m > 0.0 ? "left" : "right";
-    debug.wall_constraint_correction_deg = correction_deg;
     return correction_deg;
 }
 
@@ -1853,6 +1953,238 @@ double AutoAvoidController::lateralBalanceCorrectionDeg(
     return correction_deg;
 }
 
+double AutoAvoidController::boundaryRiskFromDistanceM(double distance_m) const {
+    if (!std::isfinite(distance_m)) {
+        return 0.0;
+    }
+
+    const double hard_boundary_m = Judgment::kVehicleBoundaryThresholdMeters;
+    const double soft_boundary_m = hard_boundary_m +
+        std::max(0.05, config_.boundary_recovery_soft_margin_m);
+    if (distance_m <= hard_boundary_m) {
+        return 1.0;
+    }
+    if (distance_m >= soft_boundary_m) {
+        return 0.0;
+    }
+
+    return std::clamp(
+        (soft_boundary_m - distance_m) /
+            std::max(1e-6, soft_boundary_m - hard_boundary_m),
+        0.0,
+        1.0);
+}
+
+AutoAvoidController::BoundaryRecoveryLevel
+AutoAvoidController::boundaryRecoveryLevelForDistanceM(double distance_m) const {
+    if (!std::isfinite(distance_m)) {
+        return BoundaryRecoveryLevel::None;
+    }
+
+    const double hard_boundary_m = Judgment::kVehicleBoundaryThresholdMeters;
+    const double critical_boundary_m = hard_boundary_m +
+        std::max(0.0, config_.boundary_recovery_critical_margin_m);
+    const double strong_boundary_m = hard_boundary_m +
+        std::max(
+            std::max(config_.boundary_recovery_critical_margin_m, 0.0),
+            config_.boundary_recovery_strong_margin_m);
+    const double soft_boundary_m = hard_boundary_m +
+        std::max(
+            std::max(config_.boundary_recovery_strong_margin_m, 0.0),
+            config_.boundary_recovery_soft_margin_m);
+
+    if (distance_m <= critical_boundary_m) {
+        return BoundaryRecoveryLevel::Critical;
+    }
+    if (distance_m <= strong_boundary_m) {
+        return BoundaryRecoveryLevel::Strong;
+    }
+    if (distance_m <= soft_boundary_m) {
+        return BoundaryRecoveryLevel::Soft;
+    }
+    return BoundaryRecoveryLevel::None;
+}
+
+double AutoAvoidController::boundaryRecoveryStageWeight(AvoidanceStage stage) const {
+    switch (stage) {
+        case AvoidanceStage::Turning:
+            return std::max(0.0, config_.boundary_recovery_turning_weight);
+        case AvoidanceStage::ClearanceHold:
+            return std::max(0.0, config_.boundary_recovery_clearance_hold_weight);
+        case AvoidanceStage::ReturnHeading:
+            return std::max(0.0, config_.boundary_recovery_return_to_path_weight);
+        case AvoidanceStage::Idle:
+        default:
+            return std::max(0.0, config_.boundary_recovery_straight_weight);
+    }
+}
+
+bool AutoAvoidController::directionTowardBoundary(
+    TurnDirection direction,
+    BoundaryRiskSide boundary_side) const {
+    switch (boundary_side) {
+        case BoundaryRiskSide::Left:
+            return direction == TurnDirection::Left;
+        case BoundaryRiskSide::Right:
+            return direction == TurnDirection::Right;
+        case BoundaryRiskSide::None:
+        default:
+            return false;
+    }
+}
+
+bool AutoAvoidController::steeringTowardBoundary(
+    double steering_angle_deg,
+    BoundaryRiskSide boundary_side) const {
+    switch (boundary_side) {
+        case BoundaryRiskSide::Left:
+            return steering_angle_deg < -0.05;
+        case BoundaryRiskSide::Right:
+            return steering_angle_deg > 0.05;
+        case BoundaryRiskSide::None:
+        default:
+            return false;
+    }
+}
+
+AutoAvoidController::BoundaryRecoveryDecision
+AutoAvoidController::boundaryRecoveryDecision(
+    const SnapshotAssessment& assessment,
+    AvoidanceStage stage,
+    TurnDirection direction,
+    double main_steering_angle_deg,
+    double path_recovery_correction_deg,
+    bool tail_clearance_blocking) const {
+    BoundaryRecoveryDecision decision;
+    decision.adjusted_main_steering_deg = main_steering_angle_deg;
+
+    decision.left_risk = boundaryRiskFromDistanceM(assessment.safety_negative_front_m);
+    decision.right_risk = boundaryRiskFromDistanceM(assessment.safety_positive_front_m);
+    decision.risk_delta = decision.right_risk - decision.left_risk;
+
+    const double dominant_risk = std::max(decision.left_risk, decision.right_risk);
+    if (dominant_risk <= 0.0) {
+        return decision;
+    }
+
+    const double left_distance_m = assessment.safety_negative_front_m;
+    const double right_distance_m = assessment.safety_positive_front_m;
+    const double distance_delta_m = right_distance_m - left_distance_m;
+    if (decision.risk_delta > 0.06 || distance_delta_m < -0.04) {
+        decision.side = BoundaryRiskSide::Right;
+    } else if (decision.risk_delta < -0.06 || distance_delta_m > 0.04) {
+        decision.side = BoundaryRiskSide::Left;
+    }
+
+    if (!isBoundaryRiskSide(decision.side)) {
+        return decision;
+    }
+
+    const double danger_distance_m =
+        decision.side == BoundaryRiskSide::Left ? left_distance_m : right_distance_m;
+    decision.level = boundaryRecoveryLevelForDistanceM(danger_distance_m);
+
+    const double stage_weight = boundaryRecoveryStageWeight(stage);
+    if (stage_weight <= 0.0) {
+        return decision;
+    }
+
+    const bool steering_into_danger =
+        steeringTowardBoundary(main_steering_angle_deg, decision.side);
+    const bool direction_into_danger =
+        directionTowardBoundary(direction, decision.side);
+    const double asymmetry = dominant_risk > 1e-6 ?
+        std::clamp(std::abs(decision.risk_delta) / dominant_risk, 0.0, 1.0) :
+        0.0;
+    const double danger_bias =
+        steering_into_danger || direction_into_danger ?
+            std::max(0.35, asymmetry) :
+            asymmetry;
+    double correction_deg =
+        steeringAngleForBoundarySide(
+            decision.side,
+            dominant_risk *
+                std::max(0.0, config_.boundary_recovery_max_correction_deg) *
+                stage_weight *
+                danger_bias);
+
+    const bool opposes_committed_direction =
+        hasCommittedAvoidanceTurn() &&
+        directionTowardBoundary(active_avoidance_state_.committed_direction, decision.side);
+    if (opposes_committed_direction && tail_clearance_blocking) {
+        const double tail_scale = std::clamp(
+            std::max(std::max(0.0, config_.boundary_recovery_tail_limit_weight), dominant_risk),
+            0.0,
+            1.0);
+        correction_deg *= tail_scale;
+        decision.limited_by_tail = std::abs(correction_deg) > 0.05;
+    }
+
+    const double activation_risk = std::clamp(
+        config_.boundary_override_activation_risk,
+        0.0,
+        0.95);
+    if ((steering_into_danger || direction_into_danger) &&
+        dominant_risk >= activation_risk) {
+        const double reduction_ratio = std::clamp(
+            (dominant_risk - activation_risk) /
+                std::max(1e-6, 1.0 - activation_risk) *
+                stage_weight *
+                std::max(0.0, config_.boundary_override_max_reduction_ratio),
+            0.0,
+            std::max(0.0, config_.boundary_override_max_reduction_ratio));
+        if (std::abs(main_steering_angle_deg) > 0.05 && reduction_ratio > 0.0) {
+            decision.adjusted_main_steering_deg =
+                main_steering_angle_deg * (1.0 - reduction_ratio);
+            decision.reduced_by_deg =
+                std::abs(main_steering_angle_deg - decision.adjusted_main_steering_deg);
+            decision.reduced_main_steering =
+                std::abs(decision.reduced_by_deg) > 0.05;
+        }
+
+        decision.override_active =
+            decision.reduced_main_steering || std::abs(correction_deg) > 0.12;
+        if (decision.override_active) {
+            decision.override_reason =
+                std::string(steering_into_danger ? "steering_into_" : "direction_into_") +
+                boundaryRiskSideName(decision.side) +
+                "_boundary";
+        }
+    }
+
+    decision.correction_deg = correction_deg;
+    decision.active =
+        decision.override_active || std::abs(decision.correction_deg) > 0.05;
+    if (std::abs(path_recovery_correction_deg) > 0.05 &&
+        std::abs(decision.correction_deg) > 0.05) {
+        decision.aligned_with_path =
+            (path_recovery_correction_deg > 0.0 && decision.correction_deg > 0.0) ||
+            (path_recovery_correction_deg < 0.0 && decision.correction_deg < 0.0);
+        decision.conflict_with_path =
+            !decision.aligned_with_path;
+    }
+    return decision;
+}
+
+void AutoAvoidController::applyBoundaryRecoveryDebug(
+    const BoundaryRecoveryDecision& decision,
+    DebugInfo& debug) const {
+    debug.boundary_risk_left = decision.left_risk;
+    debug.boundary_risk_right = decision.right_risk;
+    debug.boundary_risk_delta = decision.risk_delta;
+    debug.boundary_recovery_active = decision.active;
+    debug.boundary_recovery_side = decision.side;
+    debug.boundary_recovery_level = decision.level;
+    debug.boundary_recovery_correction_deg = decision.correction_deg;
+    debug.boundary_recovery_limited_by_tail = decision.limited_by_tail;
+    debug.boundary_override_active = decision.override_active;
+    debug.boundary_override_reason = decision.override_reason;
+    debug.boundary_override_reduced_main_steering = decision.reduced_main_steering;
+    debug.boundary_override_reduced_by_deg = decision.reduced_by_deg;
+    debug.boundary_recovery_and_path_aligned = decision.aligned_with_path;
+    debug.boundary_recovery_and_path_conflict = decision.conflict_with_path;
+}
+
 double AutoAvoidController::avoidanceSteeringSlewDegPerTick(
     double front_nearest_m) const {
     const double ratio = normalizedAvoidanceDistanceRatio(front_nearest_m);
@@ -2081,6 +2413,28 @@ std::string AutoAvoidController::formatDebugText(const DebugInfo& debug) const {
     if (debug.lateral_balance_active) {
         out << ", balance=" << format_number(debug.lateral_balance_correction_deg, 2);
     }
+    if (debug.boundary_recovery_active) {
+        out << ", boundary_recovery="
+            << boundaryRiskSideName(debug.boundary_recovery_side)
+            << "/" << boundaryRecoveryLevelName(debug.boundary_recovery_level)
+            << ":" << format_number(debug.boundary_recovery_correction_deg, 2);
+    }
+    if (debug.boundary_recovery_limited_by_tail) {
+        out << ", boundary_tail_limit=1";
+    }
+    if (debug.boundary_override_active) {
+        out << ", boundary_override=" << debug.boundary_override_reason;
+        if (debug.boundary_override_reduced_main_steering) {
+            out << "/" << format_number(debug.boundary_override_reduced_by_deg, 2);
+        }
+    }
+    if (std::abs(debug.boundary_risk_left) > 0.001 ||
+        std::abs(debug.boundary_risk_right) > 0.001) {
+        out << ", boundary_risk="
+            << format_number(debug.boundary_risk_left, 2)
+            << "/" << format_number(debug.boundary_risk_right, 2)
+            << "/" << format_number(debug.boundary_risk_delta, 2);
+    }
     if (debug.wall_constraint_active) {
         out << ", wall_constraint=" << debug.wall_constraint_side
             << ":" << format_number(debug.wall_constraint_correction_deg, 2);
@@ -2099,6 +2453,12 @@ std::string AutoAvoidController::formatDebugText(const DebugInfo& debug) const {
             << ", yaw_recovery=" << format_number(debug.yaw_recovery_correction_deg, 2)
             << ", path_recovery=" << format_number(debug.path_recovery_correction_deg, 2)
             << ", return_combined=" << format_number(debug.combined_return_correction_deg, 2);
+        if (debug.boundary_recovery_and_path_aligned) {
+            out << ", boundary_path=aligned";
+        }
+        if (debug.boundary_recovery_and_path_conflict) {
+            out << ", boundary_path=conflict";
+        }
     }
     if (debug.tail_clearance_complete) {
         out << ", tail_clear=1";
