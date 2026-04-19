@@ -24,6 +24,10 @@ constexpr int kAutoAvoidFrontClusterMinPoints = 3;
 constexpr double kAutoAvoidFrontClusterMaxGapDeg = 2.5;
 constexpr double kAutoAvoidFrontClusterAdjacentRangeDeltaMeters = 0.25;
 constexpr double kAutoAvoidFrontClusterAngleAverageBandMeters = 0.05;
+constexpr int kWallLikeClusterMinPoints = 6;
+constexpr double kWallLikeClusterMinSpanDeg = 10.0;
+constexpr double kWallLikeClusterEdgeAngleDeg = 18.0;
+constexpr double kWallLikeClusterMaxAverageDeltaMeters = 0.10;
 
 double normalizeAngleDeg(double angle_deg) {
     if (!std::isfinite(angle_deg)) {
@@ -56,11 +60,100 @@ struct FrontSectorPoint {
 
 struct FrontClusterCandidate {
     bool valid = false;
+    int cluster_id = -1;
     double median_range_m = 0.0;
     double nearest_m = 0.0;
     double nearest_angle_deg = 0.0;
+    double center_angle_deg = 0.0;
     int support_points = 0;
+    double span_deg = 0.0;
+    double average_adjacent_range_delta_m = 0.0;
+    bool wall_like = false;
+    double score = 0.0;
 };
+
+using SectorState = AutoAvoidInputBuilder::SectorState;
+using FrontTargetSelection = AutoAvoidInputBuilder::FrontTargetSelection;
+
+double meanAdjacentRangeDeltaM(const std::vector<FrontSectorPoint>& cluster) {
+    if (cluster.size() < 2) {
+        return 0.0;
+    }
+
+    double delta_sum_m = 0.0;
+    for (std::size_t i = 1; i < cluster.size(); ++i) {
+        delta_sum_m += std::abs(cluster[i].range - cluster[i - 1].range);
+    }
+    return delta_sum_m / static_cast<double>(cluster.size() - 1);
+}
+
+bool isWallLikeFrontCluster(
+    const FrontClusterCandidate& candidate,
+    const SectorState& negative_front,
+    const SectorState& positive_front) {
+    if (!candidate.valid) {
+        return false;
+    }
+
+    const bool broad_cluster =
+        candidate.support_points >= kWallLikeClusterMinPoints &&
+        candidate.span_deg >= kWallLikeClusterMinSpanDeg;
+    if (!broad_cluster) {
+        return false;
+    }
+
+    const bool smooth_range =
+        candidate.average_adjacent_range_delta_m <= kWallLikeClusterMaxAverageDeltaMeters;
+    if (!smooth_range) {
+        return false;
+    }
+
+    const bool near_sector_edge =
+        std::abs(candidate.center_angle_deg) >= kWallLikeClusterEdgeAngleDeg;
+    const SectorState& likely_side_sector =
+        candidate.center_angle_deg < 0.0 ? negative_front : positive_front;
+    const bool continuous_with_side =
+        likely_side_sector.valid &&
+        std::isfinite(likely_side_sector.nearest_m) &&
+        std::abs(likely_side_sector.nearest_m - candidate.median_range_m) <= 0.30;
+    const bool very_broad_cluster =
+        candidate.support_points >= 9 || candidate.span_deg >= 16.0;
+
+    return near_sector_edge || continuous_with_side || very_broad_cluster;
+}
+
+double frontClusterSelectionScore(const FrontClusterCandidate& candidate) {
+    if (!candidate.valid) {
+        return -std::numeric_limits<double>::infinity();
+    }
+
+    const double clamped_median_m =
+        std::clamp(candidate.median_range_m, 0.35, 4.0);
+    const double distance_score = 4.0 / clamped_median_m;
+    const double center_bonus =
+        1.6 * (1.0 - std::min(std::abs(candidate.nearest_angle_deg), 58.0) / 58.0);
+    const double compact_bonus =
+        0.8 * (1.0 - std::clamp(candidate.span_deg / 24.0, 0.0, 1.0));
+    const double support_bonus =
+        0.07 * std::min(candidate.support_points, 10);
+    const double wall_penalty = candidate.wall_like ? 1.35 : 0.0;
+    return distance_score + center_bonus + compact_bonus + support_bonus - wall_penalty;
+}
+
+std::string selectionReasonForCluster(
+    const FrontClusterCandidate& selected,
+    bool wall_like_cluster_suppressed) {
+    if (!selected.valid) {
+        return "front_sector_fallback";
+    }
+    if (selected.wall_like) {
+        return "wall_like_cluster_selected";
+    }
+    if (wall_like_cluster_suppressed) {
+        return "discrete_cluster_over_wall";
+    }
+    return "scored_discrete_cluster";
+}
 
 }  // namespace
 
@@ -173,12 +266,22 @@ AutoAvoidInputBuilder::LidarInputFrame AutoAvoidInputBuilder::buildLidarInputFra
             });
 
         FrontClusterCandidate best_cluster;
+        bool wall_like_cluster_suppressed = false;
         std::vector<FrontSectorPoint> current_cluster;
+        int next_cluster_id = 0;
         const auto consider_cluster =
-            [&best_cluster](const std::vector<FrontSectorPoint>& cluster) {
+            [&best_cluster,
+                &wall_like_cluster_suppressed,
+                &next_cluster_id,
+                &frame](const std::vector<FrontSectorPoint>& cluster) {
                 if (static_cast<int>(cluster.size()) < kAutoAvoidFrontClusterMinPoints) {
                     return;
                 }
+
+                FrontClusterCandidate candidate;
+                candidate.valid = true;
+                candidate.cluster_id = next_cluster_id++;
+                candidate.support_points = static_cast<int>(cluster.size());
 
                 std::vector<double> sorted_ranges;
                 sorted_ranges.reserve(cluster.size());
@@ -194,6 +297,8 @@ AutoAvoidInputBuilder::LidarInputFrame AutoAvoidInputBuilder::buildLidarInputFra
                 std::sort(sorted_ranges.begin(), sorted_ranges.end());
                 const double median_range_m = sorted_ranges[sorted_ranges.size() / 2];
 
+                candidate.median_range_m = median_range_m;
+                candidate.nearest_m = nearest_range_m;
                 double angle_sum_deg = 0.0;
                 int angle_count = 0;
                 for (const auto& point : cluster) {
@@ -207,15 +312,39 @@ AutoAvoidInputBuilder::LidarInputFrame AutoAvoidInputBuilder::buildLidarInputFra
                     nearest_angle_deg = angle_sum_deg / static_cast<double>(angle_count);
                 }
 
+                candidate.nearest_angle_deg = nearest_angle_deg;
+                candidate.center_angle_deg =
+                    0.5 * (cluster.front().angle_deg + cluster.back().angle_deg);
+                candidate.span_deg =
+                    std::max(0.0, cluster.back().angle_deg - cluster.front().angle_deg);
+                candidate.average_adjacent_range_delta_m = meanAdjacentRangeDeltaM(cluster);
+                candidate.wall_like = isWallLikeFrontCluster(
+                    candidate,
+                    frame.negative_front_sector,
+                    frame.positive_front_sector);
+                candidate.score = frontClusterSelectionScore(candidate);
+
+                if (candidate.wall_like &&
+                    best_cluster.valid &&
+                    !best_cluster.wall_like &&
+                    candidate.median_range_m + 1e-6 < best_cluster.median_range_m) {
+                    wall_like_cluster_suppressed = true;
+                }
+
                 if (!best_cluster.valid ||
-                    median_range_m < best_cluster.median_range_m ||
-                    (std::abs(median_range_m - best_cluster.median_range_m) < 1e-6 &&
-                        nearest_range_m < best_cluster.nearest_m)) {
-                    best_cluster.valid = true;
-                    best_cluster.median_range_m = median_range_m;
-                    best_cluster.nearest_m = nearest_range_m;
-                    best_cluster.nearest_angle_deg = nearest_angle_deg;
-                    best_cluster.support_points = static_cast<int>(cluster.size());
+                    candidate.score > best_cluster.score + 1e-6 ||
+                    (std::abs(candidate.score - best_cluster.score) < 1e-6 &&
+                        candidate.median_range_m < best_cluster.median_range_m) ||
+                    (std::abs(candidate.score - best_cluster.score) < 1e-6 &&
+                        std::abs(candidate.median_range_m - best_cluster.median_range_m) < 1e-6 &&
+                        candidate.nearest_m < best_cluster.nearest_m)) {
+                    if (best_cluster.valid &&
+                        best_cluster.wall_like &&
+                        !candidate.wall_like &&
+                        best_cluster.median_range_m <= candidate.median_range_m + 0.20) {
+                        wall_like_cluster_suppressed = true;
+                    }
+                    best_cluster = candidate;
                 }
             };
 
@@ -242,12 +371,41 @@ AutoAvoidInputBuilder::LidarInputFrame AutoAvoidInputBuilder::buildLidarInputFra
             frame.auto_avoid_front_sector.nearest_angle_deg =
                 best_cluster.nearest_angle_deg;
             frame.auto_avoid_front_sector.support_points = best_cluster.support_points;
+            frame.front_target_selection.valid = true;
+            frame.front_target_selection.selected_front_cluster_id =
+                best_cluster.cluster_id;
+            frame.front_target_selection.selected_front_cluster_score =
+                best_cluster.score;
+            frame.front_target_selection.selected_front_cluster_wall_like =
+                best_cluster.wall_like;
+            frame.front_target_selection.selected_front_cluster_points =
+                best_cluster.support_points;
+            frame.front_target_selection.selected_front_cluster_span_deg =
+                best_cluster.span_deg;
+            frame.front_target_selection.selected_front_cluster_median_range =
+                best_cluster.median_range_m;
+            frame.front_target_selection.selected_front_cluster_nearest_range =
+                best_cluster.nearest_m;
+            frame.front_target_selection.wall_like_cluster_suppressed =
+                wall_like_cluster_suppressed;
+            frame.front_target_selection.front_target_selection_reason =
+                selectionReasonForCluster(best_cluster, wall_like_cluster_suppressed);
+            frame.front_target_selection.raw_zone_source = "selected_front_cluster";
         } else {
             frame.auto_avoid_front_sector = frame.front_sector;
             frame.auto_avoid_front_sector.support_points =
                 frame.front_sector.valid ? 1 : 0;
             frame.auto_avoid_front_sector.valid_points = frame.front_sector.valid_points;
+            frame.front_target_selection = FrontTargetSelection{};
+            frame.front_target_selection.front_target_selection_reason =
+                "front_sector_fallback";
+            frame.front_target_selection.raw_zone_source = "front_sector_fallback";
         }
+    }
+    if (front_sector_points.empty()) {
+        frame.front_target_selection.front_target_selection_reason =
+            "front_sector_empty";
+        frame.front_target_selection.raw_zone_source = "front_sector_empty";
     }
 
     if (frame.auto_avoid_front_sector.valid) {
@@ -286,5 +444,7 @@ AutoAvoidController::SensorSnapshot AutoAvoidInputBuilder::buildSnapshot(
         snapshot.front.valid ? snapshot.front.nearest_angle_deg : 0.0;
     snapshot.front_support_points =
         snapshot.front.valid ? snapshot.front.support_points : 0;
+    snapshot.front_target_selection =
+        lidar_fresh ? lidar_frame.front_target_selection : FrontTargetSelection{};
     return snapshot;
 }

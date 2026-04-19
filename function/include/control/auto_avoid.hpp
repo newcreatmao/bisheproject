@@ -16,6 +16,20 @@ public:
         int support_points = 0;
     };
 
+    struct FrontTargetSelection {
+        bool valid = false;
+        int selected_front_cluster_id = -1;
+        double selected_front_cluster_score = 0.0;
+        bool selected_front_cluster_wall_like = false;
+        int selected_front_cluster_points = 0;
+        double selected_front_cluster_span_deg = 0.0;
+        double selected_front_cluster_median_range = 0.0;
+        double selected_front_cluster_nearest_range = 0.0;
+        bool wall_like_cluster_suppressed = false;
+        std::string front_target_selection_reason;
+        std::string raw_zone_source;
+    };
+
     struct AutoAvoidSnapshot {
         std::int64_t timestamp_steady_ms = 0;
         bool snapshot_fresh = false;
@@ -28,6 +42,7 @@ public:
         double front_nearest_m = 0.0;
         double front_angle_deg = 0.0;
         int front_support_points = 0;
+        FrontTargetSelection front_target_selection;
         bool imu_valid = false;
         double yaw_deg = 0.0;
         bool target_yaw_valid = false;
@@ -155,6 +170,8 @@ public:
         int imu_heading_min_effective_encoder = 20;
         double imu_heading_encoder_gain = 1.20;
         int obstacle_zone_switch_confirm_ticks = 4;
+        int obstacle_zone_override_confirm_ticks = 2;
+        int committed_direction_override_confirm_ticks = 2;
         int clearance_hold_speed_cm_s = 30;
         int return_heading_speed_cm_s = 40;
         double straight_steering_slew_deg_per_tick = 2.0;
@@ -188,14 +205,22 @@ public:
         bool spike_suppressed = false;
         bool zone_stabilized = false;
         bool zone_ambiguous = false;
+        FrontTargetSelection front_target_selection;
         bool sector_buffer_active_continue = false;
         bool boundary_stop = false;
         bool emergency_stop = false;
         bool replan_triggered = false;
+        bool resolved_zone_override_active = false;
+        std::string resolved_zone_override_reason;
+        bool committed_direction_override_active = false;
+        std::string committed_direction_override_reason;
         bool return_heading_protected = false;
         int return_heading_protect_ticks_remaining = 0;
         bool lateral_balance_active = false;
         double lateral_balance_correction_deg = 0.0;
+        bool wall_constraint_active = false;
+        std::string wall_constraint_side;
+        double wall_constraint_correction_deg = 0.0;
         bool path_reference_valid = false;
         double reference_yaw_deg = 0.0;
         double reference_side_balance = 0.0;
@@ -310,6 +335,8 @@ private:
         double tail_post_clear_progress_m = 0.0;
         int return_heading_ticks = 0;
         int return_to_path_settle_ticks = 0;
+        TurnDirection pending_override_direction = TurnDirection::Straight;
+        int pending_override_ticks = 0;
     };
 
     struct SteeringSmoothingState {
@@ -347,6 +374,8 @@ private:
         Judgment::FrontObstacleResult obstacle;
         bool ambiguous = false;
         bool stabilized = false;
+        bool override_active = false;
+        std::string override_reason;
     };
 
     SensorSnapshot normalizedSnapshot(const SensorSnapshot& snapshot) const;
@@ -399,6 +428,8 @@ private:
         const Judgment::FrontObstacleResult& front_obstacle) const;
     void resetAvoidanceState();
     bool hasCommittedAvoidanceTurn() const;
+    TurnDirection turnDirectionForObstacleZone(
+        Judgment::FrontObstacleZone zone) const;
     Judgment::FrontObstacleZone obstacleSideZoneForTurnDirection(
         TurnDirection direction) const;
     const SectorSample* sectorForZone(
@@ -453,7 +484,8 @@ private:
     int compensatedImuHeadingEncoder(double steering_angle_deg) const;
     double applyBoundarySteeringGuardDeg(
         double steering_angle_deg,
-        const SensorSnapshot& snapshot) const;
+        const SensorSnapshot& snapshot,
+        DebugInfo* debug = nullptr) const;
     double linearAvoidanceTargetYawDeltaDeg(
         const Judgment::FrontObstacleResult& front_obstacle) const;
     int frontSpeedCmS(double front_nearest_m) const;
@@ -467,7 +499,8 @@ private:
     void resetObstacleZoneStabilizer();
     Judgment::FrontObstacleResult stabilizeFrontObstacleZone(
         const Judgment::FrontObstacleResult& front_obstacle,
-        bool& stabilized);
+        bool& stabilized,
+        int confirm_ticks_override = 0);
     bool isSectorBufferNearest(const SensorSnapshot& snapshot) const;
     TurnDirection chooseCenterTurnDirection(const SensorSnapshot& snapshot) const;
     std::string formatDebugText(const DebugInfo& debug) const;

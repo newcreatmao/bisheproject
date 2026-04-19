@@ -10,6 +10,7 @@
 class AutoAvoidInputBuilder {
 public:
     using SectorState = AutoAvoidController::SectorSample;
+    using FrontTargetSelection = AutoAvoidController::FrontTargetSelection;
 
     struct LidarInputFrame {
         bool valid = false;
@@ -22,6 +23,7 @@ public:
         SectorState auto_avoid_front_sector;
         SectorState positive_front_sector;
         SectorState avoidance_buffer_sector;
+        FrontTargetSelection front_target_selection;
         std::string front_nearest_zone;
     };
 

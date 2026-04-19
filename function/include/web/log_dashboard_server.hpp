@@ -81,6 +81,7 @@ private:
         SectorRuntimeState auto_avoid_front_sector;
         SectorRuntimeState positive_front_sector;
         SectorRuntimeState avoidance_buffer_sector;
+        AutoAvoidInputBuilder::FrontTargetSelection front_target_selection;
         std::string front_nearest_zone;
     };
 

@@ -213,10 +213,18 @@ void appendAutoAvoidCycleTraceCsv(const std::string& line) {
             << "command_valid,command_mode,command_speed,command_steering,"
             << "whether_sent_start,whether_sent_angle,whether_sent_speed,whether_sent_stop,result,"
             << "reason_code,fallback_reason,direction,snapshot_fresh,front_nearest_m,front_angle_deg,"
-            << "front_support_points,raw_zone,resolved_zone,spike_suppressed,zone_stabilized,"
-            << "zone_ambiguous,sector_buffer_active_continue,boundary_stop,emergency_stop,"
-            << "replan_triggered,return_heading_protected,return_heading_protect_ticks_remaining,"
-            << "lateral_balance_active,lateral_balance_correction_deg,path_reference_valid,"
+            << "front_support_points,selected_front_cluster_id,selected_front_cluster_score,"
+            << "selected_front_cluster_wall_like,selected_front_cluster_points,"
+            << "selected_front_cluster_span_deg,selected_front_cluster_median_range,"
+            << "selected_front_cluster_nearest_range,wall_like_cluster_suppressed,"
+            << "front_target_selection_reason,raw_zone_source,raw_zone,resolved_zone,"
+            << "spike_suppressed,zone_stabilized,zone_ambiguous,resolved_zone_override_active,"
+            << "resolved_zone_override_reason,committed_direction_override_active,"
+            << "committed_direction_override_reason,sector_buffer_active_continue,"
+            << "boundary_stop,emergency_stop,replan_triggered,return_heading_protected,"
+            << "return_heading_protect_ticks_remaining,lateral_balance_active,"
+            << "lateral_balance_correction_deg,wall_constraint_active,wall_constraint_side,"
+            << "wall_constraint_correction_deg,path_reference_valid,"
             << "reference_yaw_deg,reference_side_balance,reference_left_distance_m,"
             << "reference_right_distance_m,path_reference_captured_ms,path_reference_captured_stage,"
             << "path_reference_captured_this_cycle,path_reference_clear_reason,"
@@ -1790,6 +1798,7 @@ AutoAvoidController::SensorSnapshot LogDashboardServer::autoAvoidSensorSnapshot(
     lidar_frame.auto_avoid_front_sector = lidar_state.auto_avoid_front_sector;
     lidar_frame.positive_front_sector = lidar_state.positive_front_sector;
     lidar_frame.avoidance_buffer_sector = lidar_state.avoidance_buffer_sector;
+    lidar_frame.front_target_selection = lidar_state.front_target_selection;
     lidar_frame.front_nearest_zone = lidar_state.front_nearest_zone;
     return auto_avoid_input_builder_.buildSnapshot(
         lidar_frame,
@@ -2112,11 +2121,38 @@ void LogDashboardServer::runAutoAvoidControlLoop() {
             << csvNumber(command.debug.front_nearest_m, 3) << ","
             << csvNumber(command.debug.front_angle_deg, 3) << ","
             << csvIntOrEmpty(command.debug.front_support_points, command.debug.front_nearest_valid) << ","
+            << csvIntOrEmpty(
+                   command.debug.front_target_selection.selected_front_cluster_id,
+                   command.debug.front_target_selection.valid) << ","
+            << csvNumber(
+                   command.debug.front_target_selection.selected_front_cluster_score,
+                   3) << ","
+            << csvBool(
+                   command.debug.front_target_selection.selected_front_cluster_wall_like) << ","
+            << csvIntOrEmpty(
+                   command.debug.front_target_selection.selected_front_cluster_points,
+                   command.debug.front_target_selection.valid) << ","
+            << csvNumber(
+                   command.debug.front_target_selection.selected_front_cluster_span_deg,
+                   3) << ","
+            << csvNumber(
+                   command.debug.front_target_selection.selected_front_cluster_median_range,
+                   3) << ","
+            << csvNumber(
+                   command.debug.front_target_selection.selected_front_cluster_nearest_range,
+                   3) << ","
+            << csvBool(command.debug.front_target_selection.wall_like_cluster_suppressed) << ","
+            << csvField(command.debug.front_target_selection.front_target_selection_reason) << ","
+            << csvField(command.debug.front_target_selection.raw_zone_source) << ","
             << csvField(Judgment::frontObstacleZoneName(command.debug.raw_zone)) << ","
             << csvField(Judgment::frontObstacleZoneName(command.debug.resolved_zone)) << ","
             << csvBool(command.debug.spike_suppressed) << ","
             << csvBool(command.debug.zone_stabilized) << ","
             << csvBool(command.debug.zone_ambiguous) << ","
+            << csvBool(command.debug.resolved_zone_override_active) << ","
+            << csvField(command.debug.resolved_zone_override_reason) << ","
+            << csvBool(command.debug.committed_direction_override_active) << ","
+            << csvField(command.debug.committed_direction_override_reason) << ","
             << csvBool(command.debug.sector_buffer_active_continue) << ","
             << csvBool(command.debug.boundary_stop) << ","
             << csvBool(command.debug.emergency_stop) << ","
@@ -2125,6 +2161,9 @@ void LogDashboardServer::runAutoAvoidControlLoop() {
             << command.debug.return_heading_protect_ticks_remaining << ","
             << csvBool(command.debug.lateral_balance_active) << ","
             << csvNumber(command.debug.lateral_balance_correction_deg, 3) << ","
+            << csvBool(command.debug.wall_constraint_active) << ","
+            << csvField(command.debug.wall_constraint_side) << ","
+            << csvNumber(command.debug.wall_constraint_correction_deg, 3) << ","
             << csvBool(command.debug.path_reference_valid) << ","
             << csvNumber(command.debug.reference_yaw_deg, 3) << ","
             << csvNumber(command.debug.reference_side_balance, 3) << ","
@@ -2397,6 +2436,7 @@ void LogDashboardServer::onLidarScan(const sensor_msgs::msg::LaserScan::SharedPt
     lidar_state_.auto_avoid_front_sector = lidar_input_frame.auto_avoid_front_sector;
     lidar_state_.positive_front_sector = lidar_input_frame.positive_front_sector;
     lidar_state_.avoidance_buffer_sector = lidar_input_frame.avoidance_buffer_sector;
+    lidar_state_.front_target_selection = lidar_input_frame.front_target_selection;
     lidar_state_.front_nearest_zone = lidar_input_frame.front_nearest_zone;
 }
 
@@ -2762,6 +2802,45 @@ std::string LogDashboardServer::stateJson() const {
                     "null") << ","
         << "\"front_support_points\":" <<
                 auto_avoid_runtime_state.last_decision.debug.front_support_points << ","
+        << "\"selected_front_cluster_id\":" << (
+                auto_avoid_runtime_state.last_decision.debug.front_target_selection.valid ?
+                    std::to_string(
+                        auto_avoid_runtime_state.last_decision.debug.front_target_selection.selected_front_cluster_id) :
+                    "null") << ","
+        << "\"selected_front_cluster_score\":" <<
+                (auto_avoid_runtime_state.last_decision.debug.front_target_selection.valid ?
+                    numberJson(
+                        auto_avoid_runtime_state.last_decision.debug.front_target_selection.selected_front_cluster_score,
+                        2) :
+                    "null") << ","
+        << "\"selected_front_cluster_wall_like\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.front_target_selection.selected_front_cluster_wall_like) << ","
+        << "\"selected_front_cluster_points\":" <<
+                auto_avoid_runtime_state.last_decision.debug.front_target_selection.selected_front_cluster_points << ","
+        << "\"selected_front_cluster_span_deg\":" <<
+                (auto_avoid_runtime_state.last_decision.debug.front_target_selection.valid ?
+                    numberJson(
+                        auto_avoid_runtime_state.last_decision.debug.front_target_selection.selected_front_cluster_span_deg,
+                        1) :
+                    "null") << ","
+        << "\"selected_front_cluster_median_range\":" <<
+                (auto_avoid_runtime_state.last_decision.debug.front_target_selection.valid ?
+                    numberJson(
+                        auto_avoid_runtime_state.last_decision.debug.front_target_selection.selected_front_cluster_median_range,
+                        2) :
+                    "null") << ","
+        << "\"selected_front_cluster_nearest_range\":" <<
+                (auto_avoid_runtime_state.last_decision.debug.front_target_selection.valid ?
+                    numberJson(
+                        auto_avoid_runtime_state.last_decision.debug.front_target_selection.selected_front_cluster_nearest_range,
+                        2) :
+                    "null") << ","
+        << "\"wall_like_cluster_suppressed\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.front_target_selection.wall_like_cluster_suppressed) << ","
+        << "\"front_target_selection_reason\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.front_target_selection.front_target_selection_reason) << "\","
+        << "\"raw_zone_source\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.front_target_selection.raw_zone_source) << "\","
         << "\"raw_zone\":\"" << jsonEscape(
                 Judgment::frontObstacleZoneName(
                     auto_avoid_runtime_state.last_decision.debug.raw_zone)) << "\","
@@ -2774,6 +2853,14 @@ std::string LogDashboardServer::stateJson() const {
                 auto_avoid_runtime_state.last_decision.debug.zone_stabilized) << ","
         << "\"zone_ambiguous\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.zone_ambiguous) << ","
+        << "\"resolved_zone_override_active\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.resolved_zone_override_active) << ","
+        << "\"resolved_zone_override_reason\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.resolved_zone_override_reason) << "\","
+        << "\"committed_direction_override_active\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.committed_direction_override_active) << ","
+        << "\"committed_direction_override_reason\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.committed_direction_override_reason) << "\","
         << "\"sector_buffer_active_continue\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.sector_buffer_active_continue) << ","
         << "\"boundary_stop\":" << boolJson(
@@ -2790,6 +2877,12 @@ std::string LogDashboardServer::stateJson() const {
                 auto_avoid_runtime_state.last_decision.debug.lateral_balance_active) << ","
         << "\"lateral_balance_correction_deg\":" <<
                 numberJson(auto_avoid_runtime_state.last_decision.debug.lateral_balance_correction_deg, 2) << ","
+        << "\"wall_constraint_active\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.wall_constraint_active) << ","
+        << "\"wall_constraint_side\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.wall_constraint_side) << "\","
+        << "\"wall_constraint_correction_deg\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.wall_constraint_correction_deg, 2) << ","
         << "\"path_reference_valid\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.path_reference_valid) << ","
         << "\"reference_yaw_deg\":" << (
