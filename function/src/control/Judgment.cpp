@@ -26,7 +26,10 @@ bool Judgment::isBoundaryDistanceClear(
     double nearest_m,
     double threshold_m) {
     if (!isBoundaryReadingValid(valid, nearest_m)) {
-        return false;
+        // Wide-open environments can legitimately leave one or both side
+        // sectors without valid returns. Treat "no boundary reading" as
+        // non-blocking instead of forcing a stop.
+        return true;
     }
     return nearest_m > normalizedBoundaryThreshold(threshold_m);
 }
@@ -155,6 +158,10 @@ Judgment::VehicleBoundaryResult Judgment::checkVehicleBoundary(
     double threshold_m) const {
     VehicleBoundaryResult result;
     result.threshold_m = normalizedBoundaryThreshold(threshold_m);
+    const bool left_has_reading =
+        isBoundaryReadingValid(input.left_valid, input.left_nearest_m);
+    const bool right_has_reading =
+        isBoundaryReadingValid(input.right_valid, input.right_nearest_m);
     result.left_clear = isLeftBoundaryClear(
         input.left_valid,
         input.left_nearest_m,
@@ -163,9 +170,15 @@ Judgment::VehicleBoundaryResult Judgment::checkVehicleBoundary(
         input.right_valid,
         input.right_nearest_m,
         result.threshold_m);
-    result.valid =
-        isBoundaryReadingValid(input.left_valid, input.left_nearest_m) &&
-        isBoundaryReadingValid(input.right_valid, input.right_nearest_m);
-    result.clear = result.valid && areVehicleBoundariesClear(input, result.threshold_m);
+    // Boundary judgment remains valid even if one or both side sectors have no
+    // usable points; only actual near-boundary readings should block motion.
+    result.valid = true;
+    result.clear = areVehicleBoundariesClear(input, result.threshold_m);
+    if (left_has_reading && !result.left_clear) {
+        result.clear = false;
+    }
+    if (right_has_reading && !result.right_clear) {
+        result.clear = false;
+    }
     return result;
 }

@@ -8,6 +8,7 @@
 #include <string>
 #include <thread>
 
+#include "control/auto_avoid_control_snapshot_pool.hpp"
 #include "control/auto_avoid.hpp"
 #include "control/auto_avoid_input_builder.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -163,6 +164,7 @@ private:
     mutable std::mutex stm32_mutex_;
     AutoAvoidController auto_avoid_controller_;
     AutoAvoidInputBuilder auto_avoid_input_builder_;
+    AutoAvoidControlSnapshotPool auto_avoid_control_snapshot_pool_;
     DepthRuntimeState depth_state_;
     LidarRuntimeState lidar_state_;
     ImuRuntimeState imu_state_;

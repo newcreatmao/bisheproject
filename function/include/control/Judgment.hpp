@@ -16,6 +16,9 @@ public:
     };
 
     struct VehicleBoundaryResult {
+        // valid means the boundary judgment itself completed successfully.
+        // Missing side-sector readings are allowed and no longer force an
+        // invalid result in wide-open areas.
         bool valid = false;
         bool left_clear = false;
         bool right_clear = false;

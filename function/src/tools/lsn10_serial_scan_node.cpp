@@ -30,6 +30,7 @@ constexpr int kIntervalsPerPacket = kPointsPerPacket - 1;
 // 0.8 degrees per sample, which is roughly 450 points per full revolution.
 constexpr int kFullScanPointCount = 450;
 constexpr double kAngleIncrementDeg = 360.0 / static_cast<double>(kFullScanPointCount);
+constexpr double kPublishedScanRangeClampM = 2.5;
 
 double wrapDegrees(double angle_deg)
 {
@@ -79,7 +80,7 @@ public:
     scan_topic_ = getParam("scan_topic", std::string("/scan"));
     serial_port_ = getParam("serial_port_", std::string("/dev/lidar"));
     min_range_ = getParam("min_range", 0.2);
-    max_range_ = getParam("max_range", 12.0);
+    max_range_ = std::min(getParam("max_range", 12.0), kPublishedScanRangeClampM);
     angle_disable_min_ = wrapDegrees(getParam("angle_disable_min", 0.0));
     angle_disable_max_ = wrapDegrees(getParam("angle_disable_max", 0.0));
     baud_rate_ = getParam("baud_rate", 230400);
@@ -301,9 +302,13 @@ private:
       }
 
       const double range_m = static_cast<double>(raw_distance) / 1000.0;
-      if (range_m < min_range_ || range_m > max_range_) {
+      if (range_m < min_range_) {
         continue;
       }
+      // Clamp the published scan at the driver layer so downstream consumers
+      // all see the same 2.5 m source-range ceiling without changing obstacle
+      // filtering logic in the auto-avoid controller.
+      const double published_range_m = std::min(range_m, max_range_);
 
       // Match the vendor driver publishing order for N10: 0 deg lands at the
       // last beam slot and angles decrease through the scan array.
@@ -319,8 +324,8 @@ private:
         point_index = 0;
       }
 
-      if (range_m < current_ranges_[point_index]) {
-        current_ranges_[point_index] = static_cast<float>(range_m);
+      if (published_range_m < current_ranges_[point_index]) {
+        current_ranges_[point_index] = static_cast<float>(published_range_m);
         current_intensities_[point_index] = static_cast<float>(raw_intensity);
       }
     }

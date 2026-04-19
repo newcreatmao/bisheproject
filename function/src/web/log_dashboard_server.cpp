@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <cstring>
 #include <deque>
 #include <cstdlib>
@@ -191,73 +192,131 @@ double steadyMs(const std::chrono::steady_clock::time_point& value) {
     return static_cast<double>(steadyNs(value)) / 1e6;
 }
 
+std::string traceFileTimestampSuffix() {
+    const std::time_t now = std::time(nullptr);
+    std::tm local_tm {};
+    localtime_r(&now, &local_tm);
+    std::ostringstream out;
+    out << std::put_time(&local_tm, "%Y%m%d_%H%M%S");
+    return out.str();
+}
+
+void ensureCsvHeaderWithRotation(
+    const fs::path& path,
+    const std::string& expected_header,
+    const std::string& backup_stem) {
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+
+    bool header_matches = false;
+    if (fs::exists(path, ec) && fs::file_size(path, ec) > 0) {
+        std::ifstream input(path);
+        std::string first_line;
+        if (input.is_open() && std::getline(input, first_line)) {
+            header_matches =
+                trimWhitespace(first_line) == trimWhitespace(expected_header);
+        }
+        if (!header_matches) {
+            const fs::path backup_path =
+                path.parent_path() /
+                (backup_stem + "_" + traceFileTimestampSuffix() + path.extension().string());
+            std::error_code rename_ec;
+            fs::rename(path, backup_path, rename_ec);
+            if (rename_ec) {
+                std::ifstream source(path, std::ios::binary);
+                std::ofstream backup(backup_path, std::ios::binary | std::ios::trunc);
+                if (source.is_open() && backup.is_open()) {
+                    backup << source.rdbuf();
+                }
+                std::error_code remove_ec;
+                fs::remove(path, remove_ec);
+            }
+        }
+    }
+
+    if (!header_matches) {
+        std::ofstream output(path, std::ios::trunc);
+        if (!output.is_open()) {
+            return;
+        }
+        output << expected_header << "\n";
+    }
+}
+
+std::string autoAvoidCycleTraceHeader() {
+    return
+        "control_cycle_id,cycle_start_ms,cycle_end_ms,cycle_duration_ms,"
+        "snapshot_valid,lidar_valid,imu_valid,auto_avoid_state_before,auto_avoid_state_after,"
+        "command_valid,command_mode,command_speed,command_steering,"
+        "whether_sent_start,whether_sent_angle,whether_sent_speed,whether_sent_stop,result,"
+        "reason_code,fallback_reason,direction,snapshot_fresh,"
+        "control_snapshot_seq,control_snapshot_stamp_ms,lidar_snapshot_seq,imu_snapshot_seq,"
+        "lidar_snapshot_age_ms,imu_snapshot_age_ms,control_snapshot_consistent,"
+        "control_snapshot_source,control_snapshot_fresh,front_nearest_m,front_angle_deg,"
+        "front_support_points,selected_front_cluster_id,selected_front_cluster_score,"
+        "selected_front_cluster_wall_like,selected_front_cluster_points,"
+        "selected_front_cluster_span_deg,selected_front_cluster_median_range,"
+        "selected_front_cluster_nearest_range,selected_front_cluster_is_discrete_primary,"
+        "selected_front_cluster_is_wall_like,wall_like_cluster_suppressed,"
+        "front_target_role,raw_zone_from_discrete_target,"
+        "wall_like_suppressed_from_zone,front_target_selection_reason,"
+        "raw_zone_source,raw_zone,resolved_zone,"
+        "spike_suppressed,zone_stabilized,zone_ambiguous,resolved_zone_override_active,"
+        "resolved_zone_override_reason,committed_direction_override_active,"
+        "committed_direction_override_reason,turning_to_clearance_candidate,"
+        "turning_to_clearance_confirm_ticks,turning_to_clearance_reason,"
+        "center_turn_decision_mode,center_turn_bias_removed,center_turn_decision_reason,"
+        "active_avoidance_commit_present,sector_buffer_active_continue,"
+        "sector_buffer_continue_active,sector_buffer_observe_only,"
+        "sector_buffer_redirect_to_straight,sector_buffer_redirect_reason,"
+        "straight_drive_due_to_sector_buffer,sector_buffer_interrupt_reason,"
+        "boundary_stop,emergency_stop,replan_triggered,active_stage_priority_mode,"
+        "replan_override_active,replan_override_reason,active_stage_protection_active,"
+        "active_stage_protection_reason,return_heading_protected,"
+        "return_heading_protect_ticks_remaining,lateral_balance_active,"
+        "lateral_balance_correction_deg,wall_constraint_active,wall_constraint_side,"
+        "wall_constraint_correction_deg,boundary_recovery_active,boundary_recovery_side,"
+        "boundary_recovery_level,boundary_recovery_correction_deg,"
+        "boundary_recovery_limited_by_tail,boundary_override_active,"
+        "boundary_override_reason,boundary_override_reduced_main_steering,"
+        "boundary_override_reduced_by_deg,boundary_risk_left,boundary_risk_right,"
+        "boundary_risk_delta,boundary_recovery_and_path_aligned,"
+        "boundary_recovery_and_path_conflict,main_steering_deg,"
+        "main_steering_source,boundary_override_applied,boundary_override_delta_deg,"
+        "boundary_recovery_applied,boundary_recovery_delta_deg,"
+        "smoothed_steering_deg,guarded_steering_deg,final_encoder_command,"
+        "steering_direction_consistent,steering_direction_conflict_reason,"
+        "path_reference_valid,"
+        "reference_yaw_deg,reference_side_balance,reference_left_distance_m,"
+        "reference_right_distance_m,path_reference_captured_ms,path_reference_captured_stage,"
+        "path_reference_captured_this_cycle,path_reference_clear_reason,"
+        "return_to_path_active,return_to_path_phase,return_to_path_fast_recenter_active,"
+        "return_to_path_settling_active,return_to_path_can_settle,"
+        "return_to_path_blocked_reason,yaw_recovery_correction_deg,"
+        "yaw_recovery_dynamic_gain,yaw_recovery_retained_by_path,"
+        "yaw_recovery_final_deg,path_recovery_correction_deg,path_recovery_balance_error,"
+        "path_recovery_dynamic_gain,path_recovery_fast_recenter_boost,"
+        "path_recovery_final_deg,"
+        "combined_return_correction_deg,combined_return_correction_limited_by_tail,"
+        "return_to_path_progress_score,return_to_path_near_reference,"
+        "tail_clearance_complete,tail_clearance_blocking,"
+        "path_recovery_ready,path_recovery_settled,exit_to_idle_ready,used_imu_heading,"
+        "used_encoder_fallback,encoder_fallback_kind,target_yaw_valid,target_yaw_deg,"
+        "target_yaw_locked_ms,target_yaw_locked_by_stage,target_yaw_locked_this_cycle";
+}
+
 void appendAutoAvoidCycleTraceCsv(const std::string& line) {
     static std::mutex mutex;
     std::lock_guard<std::mutex> lock(mutex);
 
-    std::error_code ec;
-    fs::create_directories(fs::path(kAutoAvoidCycleTracePath).parent_path(), ec);
-    const bool need_header =
-        !fs::exists(kAutoAvoidCycleTracePath, ec) ||
-        fs::file_size(kAutoAvoidCycleTracePath, ec) == 0;
+    ensureCsvHeaderWithRotation(
+        fs::path(kAutoAvoidCycleTracePath),
+        autoAvoidCycleTraceHeader(),
+        "auto_avoid_cycle_trace_pre_header_sync");
 
     std::ofstream output(kAutoAvoidCycleTracePath, std::ios::app);
     if (!output.is_open()) {
         return;
-    }
-
-    if (need_header) {
-        output
-            << "control_cycle_id,cycle_start_ms,cycle_end_ms,cycle_duration_ms,"
-            << "snapshot_valid,lidar_valid,imu_valid,auto_avoid_state_before,auto_avoid_state_after,"
-            << "command_valid,command_mode,command_speed,command_steering,"
-            << "whether_sent_start,whether_sent_angle,whether_sent_speed,whether_sent_stop,result,"
-            << "reason_code,fallback_reason,direction,snapshot_fresh,front_nearest_m,front_angle_deg,"
-            << "front_support_points,selected_front_cluster_id,selected_front_cluster_score,"
-            << "selected_front_cluster_wall_like,selected_front_cluster_points,"
-            << "selected_front_cluster_span_deg,selected_front_cluster_median_range,"
-            << "selected_front_cluster_nearest_range,selected_front_cluster_is_discrete_primary,"
-            << "selected_front_cluster_is_wall_like,wall_like_cluster_suppressed,"
-            << "front_target_role,raw_zone_from_discrete_target,"
-            << "wall_like_suppressed_from_zone,front_target_selection_reason,"
-            << "raw_zone_source,raw_zone,resolved_zone,"
-            << "spike_suppressed,zone_stabilized,zone_ambiguous,resolved_zone_override_active,"
-            << "resolved_zone_override_reason,committed_direction_override_active,"
-            << "committed_direction_override_reason,center_turn_decision_mode,"
-            << "center_turn_bias_removed,center_turn_decision_reason,"
-            << "sector_buffer_active_continue,"
-            << "boundary_stop,emergency_stop,replan_triggered,active_stage_priority_mode,"
-            << "replan_override_active,replan_override_reason,active_stage_protection_active,"
-            << "active_stage_protection_reason,return_heading_protected,"
-            << "return_heading_protect_ticks_remaining,lateral_balance_active,"
-            << "lateral_balance_correction_deg,wall_constraint_active,wall_constraint_side,"
-            << "wall_constraint_correction_deg,boundary_recovery_active,boundary_recovery_side,"
-            << "boundary_recovery_level,boundary_recovery_correction_deg,"
-            << "boundary_recovery_limited_by_tail,boundary_override_active,"
-            << "boundary_override_reason,boundary_override_reduced_main_steering,"
-            << "boundary_override_reduced_by_deg,boundary_risk_left,boundary_risk_right,"
-            << "boundary_risk_delta,boundary_recovery_and_path_aligned,"
-            << "boundary_recovery_and_path_conflict,main_steering_deg,"
-            << "main_steering_source,boundary_override_applied,boundary_override_delta_deg,"
-            << "boundary_recovery_applied,boundary_recovery_delta_deg,"
-            << "smoothed_steering_deg,guarded_steering_deg,final_encoder_command,"
-            << "path_reference_valid,"
-            << "reference_yaw_deg,reference_side_balance,reference_left_distance_m,"
-            << "reference_right_distance_m,path_reference_captured_ms,path_reference_captured_stage,"
-            << "path_reference_captured_this_cycle,path_reference_clear_reason,"
-            << "return_to_path_active,return_to_path_phase,return_to_path_fast_recenter_active,"
-            << "return_to_path_settling_active,return_to_path_can_settle,"
-            << "return_to_path_blocked_reason,yaw_recovery_correction_deg,"
-            << "yaw_recovery_dynamic_gain,yaw_recovery_retained_by_path,"
-            << "yaw_recovery_final_deg,path_recovery_correction_deg,path_recovery_balance_error,"
-            << "path_recovery_dynamic_gain,path_recovery_fast_recenter_boost,"
-            << "path_recovery_final_deg,"
-            << "combined_return_correction_deg,combined_return_correction_limited_by_tail,"
-            << "return_to_path_progress_score,return_to_path_near_reference,"
-            << "tail_clearance_complete,tail_clearance_blocking,"
-            << "path_recovery_ready,path_recovery_settled,exit_to_idle_ready,used_imu_heading,"
-            << "used_encoder_fallback,encoder_fallback_kind,target_yaw_valid,target_yaw_deg,"
-            << "target_yaw_locked_ms,target_yaw_locked_by_stage,target_yaw_locked_this_cycle\n";
     }
 
     output << line << "\n";
@@ -1794,43 +1853,12 @@ void LogDashboardServer::stopAutoAvoidControl() {
 
 AutoAvoidController::SensorSnapshot LogDashboardServer::autoAvoidSensorSnapshot() const {
     const auto now = std::chrono::steady_clock::now();
-    LidarRuntimeState lidar_state;
-    ImuRuntimeState imu_state;
-    {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        lidar_state = lidar_state_;
-        imu_state = imu_state_;
-    }
-
-    const bool lidar_fresh =
-        lidar_state.valid &&
-        lidar_state.valid_points > 0 &&
-        lidar_state.message_count > 0 &&
-        (now - lidar_state.last_message_steady_) <= kSensorFreshWindow;
-    const bool imu_fresh =
-        imu_state.has_attitude &&
-        imu_state.message_count > 0 &&
-        (now - imu_state.last_message_steady_) <= kSensorFreshWindow;
-
-    AutoAvoidInputBuilder::LidarInputFrame lidar_frame;
-    lidar_frame.valid = lidar_state.valid;
-    lidar_frame.obstacle_detected = lidar_state.obstacle_detected;
-    lidar_frame.nearest_m = lidar_state.nearest_m;
-    lidar_frame.nearest_angle_deg = lidar_state.nearest_angle_deg;
-    lidar_frame.valid_points = lidar_state.valid_points;
-    lidar_frame.negative_front_sector = lidar_state.negative_front_sector;
-    lidar_frame.front_sector = lidar_state.front_sector;
-    lidar_frame.auto_avoid_front_sector = lidar_state.auto_avoid_front_sector;
-    lidar_frame.positive_front_sector = lidar_state.positive_front_sector;
-    lidar_frame.avoidance_buffer_sector = lidar_state.avoidance_buffer_sector;
-    lidar_frame.front_target_selection = lidar_state.front_target_selection;
-    lidar_frame.front_nearest_zone = lidar_state.front_nearest_zone;
-    return auto_avoid_input_builder_.buildSnapshot(
-        lidar_frame,
-        lidar_fresh,
-        imu_fresh,
-        imu_state.yaw_deg,
-        steadyMs(now));
+    const auto control_snapshot =
+        auto_avoid_control_snapshot_pool_.buildControlSnapshot(
+            auto_avoid_input_builder_,
+            now,
+            kSensorFreshWindow);
+    return control_snapshot.snapshot;
 }
 
 LogDashboardServer::AutoAvoidCommandTrace LogDashboardServer::applyAutoAvoidCommand(
@@ -2143,6 +2171,15 @@ void LogDashboardServer::runAutoAvoidControlLoop() {
             << csvField(AutoAvoidController::fallbackReasonName(command.fallback_reason)) << ","
             << csvField(AutoAvoidController::turnDirectionName(command.direction)) << ","
             << csvBool(command.debug.snapshot_fresh) << ","
+            << command.debug.control_snapshot_seq << ","
+            << command.debug.control_snapshot_stamp_ms << ","
+            << command.debug.lidar_snapshot_seq << ","
+            << command.debug.imu_snapshot_seq << ","
+            << csvNumber(command.debug.lidar_snapshot_age_ms, 1) << ","
+            << csvNumber(command.debug.imu_snapshot_age_ms, 1) << ","
+            << csvBool(command.debug.control_snapshot_consistent) << ","
+            << csvField(command.debug.control_snapshot_source) << ","
+            << csvBool(command.debug.control_snapshot_fresh) << ","
             << csvNumber(command.debug.front_nearest_m, 3) << ","
             << csvNumber(command.debug.front_angle_deg, 3) << ","
             << csvIntOrEmpty(command.debug.front_support_points, command.debug.front_nearest_valid) << ","
@@ -2185,10 +2222,20 @@ void LogDashboardServer::runAutoAvoidControlLoop() {
             << csvField(command.debug.resolved_zone_override_reason) << ","
             << csvBool(command.debug.committed_direction_override_active) << ","
             << csvField(command.debug.committed_direction_override_reason) << ","
+            << csvBool(command.debug.turning_to_clearance_candidate) << ","
+            << command.debug.turning_to_clearance_confirm_ticks << ","
+            << csvField(command.debug.turning_to_clearance_reason) << ","
             << csvField(command.debug.center_turn_decision_mode) << ","
             << csvBool(command.debug.center_turn_bias_removed) << ","
             << csvField(command.debug.center_turn_decision_reason) << ","
+            << csvBool(command.debug.active_avoidance_commit_present) << ","
             << csvBool(command.debug.sector_buffer_active_continue) << ","
+            << csvBool(command.debug.sector_buffer_active_continue) << ","
+            << csvBool(command.debug.sector_buffer_observe_only) << ","
+            << csvBool(command.debug.sector_buffer_redirect_to_straight) << ","
+            << csvField(command.debug.sector_buffer_redirect_reason) << ","
+            << csvBool(command.debug.straight_drive_due_to_sector_buffer) << ","
+            << csvField(command.debug.sector_buffer_interrupt_reason) << ","
             << csvBool(command.debug.boundary_stop) << ","
             << csvBool(command.debug.emergency_stop) << ","
             << csvBool(command.debug.replan_triggered) << ","
@@ -2231,6 +2278,8 @@ void LogDashboardServer::runAutoAvoidControlLoop() {
             << csvNumber(command.debug.smoothed_steering_deg, 3) << ","
             << csvNumber(command.debug.guarded_steering_deg, 3) << ","
             << command.debug.final_encoder_command << ","
+            << csvBool(command.debug.steering_direction_consistent) << ","
+            << csvField(command.debug.steering_direction_conflict_reason) << ","
             << csvBool(command.debug.path_reference_valid) << ","
             << csvNumber(command.debug.reference_yaw_deg, 3) << ","
             << csvNumber(command.debug.reference_side_balance, 3) << ","
@@ -2496,18 +2545,15 @@ void LogDashboardServer::onDepthImage(const sensor_msgs::msg::Image::SharedPtr m
 
 void LogDashboardServer::onLidarScan(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
     const auto now = std::chrono::steady_clock::now();
-    std::string previous_front_nearest_zone;
-    {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        lidar_state_.message_count += 1;
-        lidar_state_.last_message_steady_ = now;
-        previous_front_nearest_zone = lidar_state_.front_nearest_zone;
-    }
-
+    const std::string previous_front_nearest_zone =
+        auto_avoid_control_snapshot_pool_.latestFrontNearestZone();
     const auto lidar_input_frame =
         auto_avoid_input_builder_.buildLidarInputFrame(msg, previous_front_nearest_zone);
+    auto_avoid_control_snapshot_pool_.updateLidar(lidar_input_frame, now);
 
     std::lock_guard<std::mutex> lock(state_mutex_);
+    lidar_state_.message_count += 1;
+    lidar_state_.last_message_steady_ = now;
     lidar_state_.valid = lidar_input_frame.valid;
     lidar_state_.obstacle_detected = lidar_input_frame.obstacle_detected;
     lidar_state_.nearest_m = lidar_input_frame.nearest_m;
@@ -2524,46 +2570,58 @@ void LogDashboardServer::onLidarScan(const sensor_msgs::msg::LaserScan::SharedPt
 
 void LogDashboardServer::onImu(const sensor_msgs::msg::Imu::SharedPtr msg) {
     const auto now = std::chrono::steady_clock::now();
-    {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        imu_state_.message_count += 1;
-        imu_state_.last_message_steady_ = now;
-    }
-
+    bool has_attitude = false;
+    double roll_deg = 0.0;
+    double pitch_deg = 0.0;
+    double yaw_deg = 0.0;
     if (!msg) {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        imu_state_.has_attitude = false;
-        return;
-    }
+        auto_avoid_control_snapshot_pool_.updateImu(
+            false,
+            roll_deg,
+            pitch_deg,
+            yaw_deg,
+            now);
+    } else {
+        const double x = msg->orientation.x;
+        const double y = msg->orientation.y;
+        const double z = msg->orientation.z;
+        const double w = msg->orientation.w;
+        const double norm = std::sqrt(x * x + y * y + z * z + w * w);
+        if (std::isfinite(norm) && norm >= 1e-6) {
+            const double qx = x / norm;
+            const double qy = y / norm;
+            const double qz = z / norm;
+            const double qw = w / norm;
+            const double sinr_cosp = 2.0 * (qw * qx + qy * qz);
+            const double cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy);
+            const double sinp = 2.0 * (qw * qy - qz * qx);
+            const double siny_cosp = 2.0 * (qw * qz + qx * qy);
+            const double cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz);
+            const double rad_to_deg = 180.0 / std::acos(-1.0);
 
-    const double x = msg->orientation.x;
-    const double y = msg->orientation.y;
-    const double z = msg->orientation.z;
-    const double w = msg->orientation.w;
-    const double norm = std::sqrt(x * x + y * y + z * z + w * w);
-    if (!std::isfinite(norm) || norm < 1e-6) {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        imu_state_.has_attitude = false;
-        return;
+            roll_deg = std::atan2(sinr_cosp, cosr_cosp) * rad_to_deg;
+            pitch_deg =
+                std::abs(sinp) >= 1.0 ?
+                    std::copysign(90.0, sinp) :
+                    std::asin(sinp) * rad_to_deg;
+            yaw_deg = std::atan2(siny_cosp, cosy_cosp) * rad_to_deg;
+            has_attitude = true;
+        }
+        auto_avoid_control_snapshot_pool_.updateImu(
+            has_attitude,
+            roll_deg,
+            pitch_deg,
+            yaw_deg,
+            now);
     }
-
-    const double qx = x / norm;
-    const double qy = y / norm;
-    const double qz = z / norm;
-    const double qw = w / norm;
-    const double sinr_cosp = 2.0 * (qw * qx + qy * qz);
-    const double cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy);
-    const double sinp = 2.0 * (qw * qy - qz * qx);
-    const double siny_cosp = 2.0 * (qw * qz + qx * qy);
-    const double cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz);
-    const double rad_to_deg = 180.0 / std::acos(-1.0);
 
     std::lock_guard<std::mutex> lock(state_mutex_);
-    imu_state_.roll_deg = std::atan2(sinr_cosp, cosr_cosp) * rad_to_deg;
-    imu_state_.pitch_deg =
-        std::abs(sinp) >= 1.0 ? std::copysign(90.0, sinp) : std::asin(sinp) * rad_to_deg;
-    imu_state_.yaw_deg = std::atan2(siny_cosp, cosy_cosp) * rad_to_deg;
-    imu_state_.has_attitude = true;
+    imu_state_.message_count += 1;
+    imu_state_.last_message_steady_ = now;
+    imu_state_.roll_deg = roll_deg;
+    imu_state_.pitch_deg = pitch_deg;
+    imu_state_.yaw_deg = yaw_deg;
+    imu_state_.has_attitude = has_attitude;
 }
 
 void LogDashboardServer::onGpsFix(const sensor_msgs::msg::NavSatFix::SharedPtr msg) {
@@ -2872,6 +2930,32 @@ std::string LogDashboardServer::stateJson() const {
         << "\"apply_result\":\"" << jsonEscape(auto_avoid_runtime_state.last_apply_result) << "\","
         << "\"snapshot_fresh\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.snapshot_fresh) << ","
+        << "\"control_snapshot_seq\":" <<
+                auto_avoid_runtime_state.last_decision.debug.control_snapshot_seq << ","
+        << "\"control_snapshot_stamp_ms\":" <<
+                auto_avoid_runtime_state.last_decision.debug.control_snapshot_stamp_ms << ","
+        << "\"lidar_snapshot_seq\":" <<
+                auto_avoid_runtime_state.last_decision.debug.lidar_snapshot_seq << ","
+        << "\"imu_snapshot_seq\":" <<
+                auto_avoid_runtime_state.last_decision.debug.imu_snapshot_seq << ","
+        << "\"lidar_snapshot_age_ms\":" << (
+                std::isfinite(auto_avoid_runtime_state.last_decision.debug.lidar_snapshot_age_ms) ?
+                    numberJson(
+                        auto_avoid_runtime_state.last_decision.debug.lidar_snapshot_age_ms,
+                        1) :
+                    "null") << ","
+        << "\"imu_snapshot_age_ms\":" << (
+                std::isfinite(auto_avoid_runtime_state.last_decision.debug.imu_snapshot_age_ms) ?
+                    numberJson(
+                        auto_avoid_runtime_state.last_decision.debug.imu_snapshot_age_ms,
+                        1) :
+                    "null") << ","
+        << "\"control_snapshot_consistent\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.control_snapshot_consistent) << ","
+        << "\"control_snapshot_source\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.control_snapshot_source) << "\","
+        << "\"control_snapshot_fresh\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.control_snapshot_fresh) << ","
         << "\"front_nearest_valid\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.front_nearest_valid) << ","
         << "\"front_nearest_m\":" << (
@@ -2953,14 +3037,34 @@ std::string LogDashboardServer::stateJson() const {
                 auto_avoid_runtime_state.last_decision.debug.committed_direction_override_active) << ","
         << "\"committed_direction_override_reason\":\"" << jsonEscape(
                 auto_avoid_runtime_state.last_decision.debug.committed_direction_override_reason) << "\","
+        << "\"turning_to_clearance_candidate\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.turning_to_clearance_candidate) << ","
+        << "\"turning_to_clearance_confirm_ticks\":" <<
+                auto_avoid_runtime_state.last_decision.debug.turning_to_clearance_confirm_ticks << ","
+        << "\"turning_to_clearance_reason\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.turning_to_clearance_reason) << "\","
         << "\"center_turn_decision_mode\":\"" << jsonEscape(
                 auto_avoid_runtime_state.last_decision.debug.center_turn_decision_mode) << "\","
         << "\"center_turn_bias_removed\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.center_turn_bias_removed) << ","
         << "\"center_turn_decision_reason\":\"" << jsonEscape(
                 auto_avoid_runtime_state.last_decision.debug.center_turn_decision_reason) << "\","
+        << "\"active_avoidance_commit_present\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.active_avoidance_commit_present) << ","
         << "\"sector_buffer_active_continue\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.sector_buffer_active_continue) << ","
+        << "\"sector_buffer_continue_active\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.sector_buffer_active_continue) << ","
+        << "\"sector_buffer_observe_only\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.sector_buffer_observe_only) << ","
+        << "\"sector_buffer_redirect_to_straight\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.sector_buffer_redirect_to_straight) << ","
+        << "\"sector_buffer_redirect_reason\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.sector_buffer_redirect_reason) << "\","
+        << "\"straight_drive_due_to_sector_buffer\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.straight_drive_due_to_sector_buffer) << ","
+        << "\"sector_buffer_interrupt_reason\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.sector_buffer_interrupt_reason) << "\","
         << "\"boundary_stop\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.boundary_stop) << ","
         << "\"emergency_stop\":" << boolJson(
@@ -3039,6 +3143,10 @@ std::string LogDashboardServer::stateJson() const {
                 numberJson(auto_avoid_runtime_state.last_decision.debug.guarded_steering_deg, 2) << ","
         << "\"final_encoder_command\":" <<
                 auto_avoid_runtime_state.last_decision.debug.final_encoder_command << ","
+        << "\"steering_direction_consistent\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.steering_direction_consistent) << ","
+        << "\"steering_direction_conflict_reason\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.steering_direction_conflict_reason) << "\","
         << "\"path_reference_valid\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.path_reference_valid) << ","
         << "\"reference_yaw_deg\":" << (

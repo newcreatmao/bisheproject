@@ -104,6 +104,66 @@ std::string compactReplyText(const std::string& value, std::size_t max_chars = 1
     return compact;
 }
 
+std::string traceFileTimestampSuffix() {
+    const std::time_t now = std::time(nullptr);
+    std::tm local_tm {};
+    localtime_r(&now, &local_tm);
+    std::ostringstream out;
+    out << std::put_time(&local_tm, "%Y%m%d_%H%M%S");
+    return out.str();
+}
+
+std::string uartAckTraceHeader() {
+    return
+        "seq_id,control_cycle_id,source,thread_tag,cmd_type,cmd_text,"
+        "tx_steady_ns,tx_steady_ms,rx_ok_steady_ns,rx_ok_steady_ms,ack_wait_ms,"
+        "result,auto_avoid_state,speed_value,steering_value,extra";
+}
+
+void ensureCsvHeaderWithRotation(
+    const std::filesystem::path& path,
+    const std::string& expected_header,
+    const std::string& backup_stem) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+
+    bool header_matches = false;
+    if (std::filesystem::exists(path, ec) &&
+        std::filesystem::file_size(path, ec) > 0) {
+        std::ifstream input(path);
+        std::string first_line;
+        if (input.is_open() && std::getline(input, first_line)) {
+            header_matches =
+                trimTrailingWhitespace(first_line) ==
+                trimTrailingWhitespace(expected_header);
+        }
+        if (!header_matches) {
+            const std::filesystem::path backup_path =
+                path.parent_path() /
+                (backup_stem + "_" + traceFileTimestampSuffix() + path.extension().string());
+            std::error_code rename_ec;
+            std::filesystem::rename(path, backup_path, rename_ec);
+            if (rename_ec) {
+                std::ifstream source(path, std::ios::binary);
+                std::ofstream backup(backup_path, std::ios::binary | std::ios::trunc);
+                if (source.is_open() && backup.is_open()) {
+                    backup << source.rdbuf();
+                }
+                std::error_code remove_ec;
+                std::filesystem::remove(path, remove_ec);
+            }
+        }
+    }
+
+    if (!header_matches) {
+        std::ofstream output(path, std::ios::trunc);
+        if (!output.is_open()) {
+            return;
+        }
+        output << expected_header << "\n";
+    }
+}
+
 ParsedCommand parseCommandText(const std::string& cmd_text) {
     ParsedCommand parsed;
     if (cmd_text.size() < 5 || cmd_text[0] != '#' || cmd_text[1] != 'C') {
@@ -154,23 +214,14 @@ void appendUartAckTraceRow(
     const std::string& result,
     const std::string& extra) {
     std::lock_guard<std::mutex> lock(uartAckTraceMutex());
-    std::error_code ec;
-    std::filesystem::create_directories(std::filesystem::path(kUartAckTracePath).parent_path(), ec);
-
-    const bool need_header =
-        !std::filesystem::exists(kUartAckTracePath, ec) ||
-        std::filesystem::file_size(kUartAckTracePath, ec) == 0;
+    ensureCsvHeaderWithRotation(
+        std::filesystem::path(kUartAckTracePath),
+        uartAckTraceHeader(),
+        "uart_ack_trace_pre_header_sync");
 
     std::ofstream output(kUartAckTracePath, std::ios::app);
     if (!output.is_open()) {
         return;
-    }
-
-    if (need_header) {
-        output
-            << "seq_id,control_cycle_id,source,thread_tag,cmd_type,cmd_text,"
-            << "tx_steady_ns,tx_steady_ms,rx_ok_steady_ns,rx_ok_steady_ms,ack_wait_ms,"
-            << "result,auto_avoid_state,speed_value,steering_value,extra\n";
     }
 
     const bool has_speed_value = context.has_speed_value || parsed_command.has_speed_value;

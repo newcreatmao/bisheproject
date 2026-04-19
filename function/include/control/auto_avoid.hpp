@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <string>
 
 class AutoAvoidController {
@@ -38,6 +39,15 @@ public:
     struct AutoAvoidSnapshot {
         std::int64_t timestamp_steady_ms = 0;
         bool snapshot_fresh = false;
+        std::uint64_t control_snapshot_seq = 0;
+        std::int64_t control_snapshot_stamp_ms = 0;
+        std::uint64_t lidar_snapshot_seq = 0;
+        std::uint64_t imu_snapshot_seq = 0;
+        double lidar_snapshot_age_ms = std::numeric_limits<double>::quiet_NaN();
+        double imu_snapshot_age_ms = std::numeric_limits<double>::quiet_NaN();
+        bool control_snapshot_consistent = false;
+        bool control_snapshot_fresh = false;
+        std::string control_snapshot_source;
         bool lidar_valid = false;
         SectorSample negative_front;  // Lidar -90 to -62 degrees.
         SectorSample front;           // Lidar -58 to 58 degrees.
@@ -224,6 +234,10 @@ public:
         int obstacle_zone_switch_confirm_ticks = 4;
         int obstacle_zone_override_confirm_ticks = 2;
         int committed_direction_override_confirm_ticks = 2;
+        int turning_to_clearance_confirm_ticks = 2;
+        int turning_to_clearance_min_turn_ticks = 2;
+        double turning_to_clearance_release_trend_margin_m = 0.05;
+        double turning_to_clearance_release_from_min_margin_m = 0.14;
         double center_turn_min_side_distance_delta_m = 0.10;
         double center_turn_reference_balance_bias_m = 0.08;
         double center_turn_boundary_risk_delta = 0.08;
@@ -244,6 +258,15 @@ public:
 
     struct AutoAvoidDebugInfo {
         bool snapshot_fresh = false;
+        std::uint64_t control_snapshot_seq = 0;
+        std::int64_t control_snapshot_stamp_ms = 0;
+        std::uint64_t lidar_snapshot_seq = 0;
+        std::uint64_t imu_snapshot_seq = 0;
+        double lidar_snapshot_age_ms = std::numeric_limits<double>::quiet_NaN();
+        double imu_snapshot_age_ms = std::numeric_limits<double>::quiet_NaN();
+        bool control_snapshot_consistent = false;
+        bool control_snapshot_fresh = false;
+        std::string control_snapshot_source;
         bool lidar_valid = false;
         bool imu_valid = false;
         bool front_nearest_valid = false;
@@ -262,7 +285,13 @@ public:
         bool zone_stabilized = false;
         bool zone_ambiguous = false;
         FrontTargetSelection front_target_selection;
+        bool active_avoidance_commit_present = false;
         bool sector_buffer_active_continue = false;
+        bool sector_buffer_observe_only = false;
+        bool sector_buffer_redirect_to_straight = false;
+        std::string sector_buffer_redirect_reason;
+        bool straight_drive_due_to_sector_buffer = false;
+        std::string sector_buffer_interrupt_reason;
         bool boundary_stop = false;
         bool emergency_stop = false;
         bool replan_triggered = false;
@@ -275,6 +304,9 @@ public:
         std::string resolved_zone_override_reason;
         bool committed_direction_override_active = false;
         std::string committed_direction_override_reason;
+        bool turning_to_clearance_candidate = false;
+        int turning_to_clearance_confirm_ticks = 0;
+        std::string turning_to_clearance_reason;
         std::string center_turn_decision_mode;
         bool center_turn_bias_removed = false;
         std::string center_turn_decision_reason;
@@ -340,6 +372,8 @@ public:
         double smoothed_steering_deg = 0.0;
         double guarded_steering_deg = 0.0;
         int final_encoder_command = 0;
+        bool steering_direction_consistent = true;
+        std::string steering_direction_conflict_reason;
         bool used_imu_heading = false;
         bool used_encoder_fallback = false;
         EncoderFallbackKind encoder_fallback_kind = EncoderFallbackKind::None;
@@ -435,6 +469,12 @@ private:
         double committed_target_yaw_deg = 0.0;
         bool tail_side_obstacle_seen = false;
         bool tail_side_clear_phase_started = false;
+        int turning_ticks = 0;
+        int turning_to_clearance_confirm_ticks = 0;
+        double turning_last_front_distance_m =
+            std::numeric_limits<double>::quiet_NaN();
+        double turning_min_front_distance_m =
+            std::numeric_limits<double>::infinity();
         double clearance_hold_progress_m = 0.0;
         double tail_post_clear_progress_m = 0.0;
         int return_heading_ticks = 0;
@@ -511,6 +551,13 @@ private:
         std::string priority_mode = "standard_front_priority";
     };
 
+    struct TurningToClearanceDecision {
+        bool candidate = false;
+        bool confirmed = false;
+        int confirm_ticks = 0;
+        std::string reason;
+    };
+
     SensorSnapshot normalizedSnapshot(const SensorSnapshot& snapshot) const;
     SensorSnapshot bindManagedTargetYaw(const SensorSnapshot& snapshot);
     SensorSnapshot filteredSnapshot(const SensorSnapshot& snapshot);
@@ -565,6 +612,15 @@ private:
     void applyActiveStagePriorityDebug(
         const ActiveStagePriorityDecision& decision,
         DebugInfo& debug) const;
+    TurningToClearanceDecision updateTurningToClearanceDecision(
+        const SnapshotAssessment& assessment,
+        const Judgment::FrontObstacleResult& front_obstacle);
+    void applyTurningToClearanceDebug(
+        const TurningToClearanceDecision& decision,
+        DebugInfo& debug) const;
+    bool shouldInterruptSectorBufferContinue(
+        const SnapshotAssessment& assessment,
+        std::string& reason) const;
     void resetAvoidanceState();
     bool hasCommittedAvoidanceTurn() const;
     bool frontTargetIsDiscretePrimary(const SensorSnapshot& snapshot) const;
@@ -636,6 +692,7 @@ private:
         const BoundaryRecoveryDecision& boundary_recovery,
         double smoothed_steering_deg,
         double guarded_steering_deg,
+        TurnDirection expected_direction,
         DebugInfo& debug) const;
     double sideBalanceFromAssessment(const SnapshotAssessment& assessment) const;
     bool frontClearEnoughForPathRecovery(const SensorSnapshot& snapshot) const;
