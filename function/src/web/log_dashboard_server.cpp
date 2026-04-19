@@ -234,8 +234,16 @@ void appendAutoAvoidCycleTraceCsv(const std::string& line) {
             << "reference_yaw_deg,reference_side_balance,reference_left_distance_m,"
             << "reference_right_distance_m,path_reference_captured_ms,path_reference_captured_stage,"
             << "path_reference_captured_this_cycle,path_reference_clear_reason,"
-            << "return_to_path_active,yaw_recovery_correction_deg,path_recovery_correction_deg,"
-            << "combined_return_correction_deg,tail_clearance_complete,tail_clearance_blocking,"
+            << "return_to_path_active,return_to_path_phase,return_to_path_fast_recenter_active,"
+            << "return_to_path_settling_active,return_to_path_can_settle,"
+            << "return_to_path_blocked_reason,yaw_recovery_correction_deg,"
+            << "yaw_recovery_dynamic_gain,yaw_recovery_retained_by_path,"
+            << "yaw_recovery_final_deg,path_recovery_correction_deg,path_recovery_balance_error,"
+            << "path_recovery_dynamic_gain,path_recovery_fast_recenter_boost,"
+            << "path_recovery_final_deg,"
+            << "combined_return_correction_deg,combined_return_correction_limited_by_tail,"
+            << "return_to_path_progress_score,return_to_path_near_reference,"
+            << "tail_clearance_complete,tail_clearance_blocking,"
             << "path_recovery_ready,path_recovery_settled,exit_to_idle_ready,used_imu_heading,"
             << "used_encoder_fallback,encoder_fallback_kind,target_yaw_valid,target_yaw_deg,"
             << "target_yaw_locked_ms,target_yaw_locked_by_stage,target_yaw_locked_this_cycle\n";
@@ -2198,9 +2206,24 @@ void LogDashboardServer::runAutoAvoidControlLoop() {
             << csvBool(command.debug.path_reference_captured_this_cycle) << ","
             << csvField(AutoAvoidController::pathReferenceClearReasonName(command.debug.path_reference_clear_reason)) << ","
             << csvBool(command.debug.return_to_path_active) << ","
+            << csvField(command.debug.return_to_path_phase) << ","
+            << csvBool(command.debug.return_to_path_fast_recenter_active) << ","
+            << csvBool(command.debug.return_to_path_settling_active) << ","
+            << csvBool(command.debug.return_to_path_can_settle) << ","
+            << csvField(command.debug.return_to_path_blocked_reason) << ","
             << csvNumber(command.debug.yaw_recovery_correction_deg, 3) << ","
+            << csvNumber(command.debug.yaw_recovery_dynamic_gain, 3) << ","
+            << csvBool(command.debug.yaw_recovery_retained_by_path) << ","
+            << csvNumber(command.debug.yaw_recovery_final_deg, 3) << ","
             << csvNumber(command.debug.path_recovery_correction_deg, 3) << ","
+            << csvNumber(command.debug.path_recovery_balance_error, 3) << ","
+            << csvNumber(command.debug.path_recovery_dynamic_gain, 3) << ","
+            << csvNumber(command.debug.path_recovery_fast_recenter_boost, 3) << ","
+            << csvNumber(command.debug.path_recovery_final_deg, 3) << ","
             << csvNumber(command.debug.combined_return_correction_deg, 3) << ","
+            << csvBool(command.debug.combined_return_correction_limited_by_tail) << ","
+            << csvNumber(command.debug.return_to_path_progress_score, 3) << ","
+            << csvBool(command.debug.return_to_path_near_reference) << ","
             << csvBool(command.debug.tail_clearance_complete) << ","
             << csvBool(command.debug.tail_clearance_blocking) << ","
             << csvBool(command.debug.path_recovery_ready) << ","
@@ -2967,12 +2990,42 @@ std::string LogDashboardServer::stateJson() const {
                     auto_avoid_runtime_state.last_decision.debug.path_reference_clear_reason)) << "\","
         << "\"return_to_path_active\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.return_to_path_active) << ","
+        << "\"return_to_path_phase\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.return_to_path_phase) << "\","
+        << "\"return_to_path_fast_recenter_active\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.return_to_path_fast_recenter_active) << ","
+        << "\"return_to_path_settling_active\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.return_to_path_settling_active) << ","
+        << "\"return_to_path_can_settle\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.return_to_path_can_settle) << ","
+        << "\"return_to_path_blocked_reason\":\"" << jsonEscape(
+                auto_avoid_runtime_state.last_decision.debug.return_to_path_blocked_reason) << "\","
         << "\"yaw_recovery_correction_deg\":" <<
                 numberJson(auto_avoid_runtime_state.last_decision.debug.yaw_recovery_correction_deg, 2) << ","
+        << "\"yaw_recovery_dynamic_gain\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.yaw_recovery_dynamic_gain, 3) << ","
+        << "\"yaw_recovery_retained_by_path\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.yaw_recovery_retained_by_path) << ","
+        << "\"yaw_recovery_final_deg\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.yaw_recovery_final_deg, 2) << ","
         << "\"path_recovery_correction_deg\":" <<
                 numberJson(auto_avoid_runtime_state.last_decision.debug.path_recovery_correction_deg, 2) << ","
+        << "\"path_recovery_balance_error\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.path_recovery_balance_error, 3) << ","
+        << "\"path_recovery_dynamic_gain\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.path_recovery_dynamic_gain, 3) << ","
+        << "\"path_recovery_fast_recenter_boost\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.path_recovery_fast_recenter_boost, 3) << ","
+        << "\"path_recovery_final_deg\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.path_recovery_final_deg, 2) << ","
         << "\"combined_return_correction_deg\":" <<
                 numberJson(auto_avoid_runtime_state.last_decision.debug.combined_return_correction_deg, 2) << ","
+        << "\"combined_return_correction_limited_by_tail\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.combined_return_correction_limited_by_tail) << ","
+        << "\"return_to_path_progress_score\":" <<
+                numberJson(auto_avoid_runtime_state.last_decision.debug.return_to_path_progress_score, 3) << ","
+        << "\"return_to_path_near_reference\":" << boolJson(
+                auto_avoid_runtime_state.last_decision.debug.return_to_path_near_reference) << ","
         << "\"tail_clearance_complete\":" << boolJson(
                 auto_avoid_runtime_state.last_decision.debug.tail_clearance_complete) << ","
         << "\"tail_clearance_blocking\":" << boolJson(

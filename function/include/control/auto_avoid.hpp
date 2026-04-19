@@ -169,6 +169,17 @@ public:
         double clearance_hold_heading_kp = 0.60;
         double clearance_hold_max_correction_deg = 8.0;
         double return_heading_tolerance_deg = 2.5;
+        double return_to_path_fast_recenter_balance_error_m = 0.30;
+        double return_to_path_fast_recenter_yaw_error_deg = 4.5;
+        double return_to_path_near_reference_balance_error_m = 0.14;
+        double return_to_path_near_reference_yaw_error_deg = 1.8;
+        double return_to_path_settle_balance_error_m = 0.18;
+        double return_to_path_settle_yaw_error_deg = 2.6;
+        double return_to_path_settling_hold_balance_error_m = 0.24;
+        double return_to_path_settling_hold_yaw_error_deg = 3.2;
+        double return_to_path_yaw_fast_gain_scale = 1.65;
+        double return_to_path_yaw_settling_gain_scale = 0.90;
+        double return_to_path_yaw_retained_gain_scale = 1.25;
         double straight_heading_max_correction_deg = 6.0;
         double caution_heading_max_correction_deg = 6.0;
         double lateral_balance_min_side_distance_m = 0.75;
@@ -187,7 +198,17 @@ public:
         double boundary_override_max_reduction_ratio = 0.85;
         double return_to_path_balance_gain_deg_per_m = 6.0;
         double return_to_path_balance_max_correction_deg = 2.8;
+        double return_to_path_balance_fast_gain_scale = 1.35;
+        double return_to_path_balance_settling_gain_scale = 0.85;
+        double return_to_path_balance_fast_boost_ratio = 0.35;
+        double return_to_path_balance_fast_max_correction_deg = 4.2;
         double return_to_path_balance_tolerance_m = 0.18;
+        double return_to_path_exit_correction_deg = 1.10;
+        double return_to_path_tail_blocking_limit_scale = 0.45;
+        double return_to_path_tail_blocking_min_correction_deg = 1.40;
+        double return_to_path_tail_release_progress_score = 0.72;
+        double return_to_path_tail_release_limit_scale = 0.78;
+        int return_to_path_settle_entry_ticks = 2;
         int return_to_path_settle_confirm_ticks = 4;
         double max_usable_yaw_error_deg = 45.0;
         int imu_heading_deadband_start_encoder = 6;
@@ -268,9 +289,24 @@ public:
         AvoidanceStage path_reference_captured_stage = AvoidanceStage::Idle;
         bool path_reference_captured_this_cycle = false;
         bool return_to_path_active = false;
+        std::string return_to_path_phase;
+        bool return_to_path_fast_recenter_active = false;
+        bool return_to_path_settling_active = false;
+        bool return_to_path_can_settle = false;
+        std::string return_to_path_blocked_reason;
         double yaw_recovery_correction_deg = 0.0;
+        double yaw_recovery_dynamic_gain = 0.0;
+        bool yaw_recovery_retained_by_path = false;
+        double yaw_recovery_final_deg = 0.0;
         double path_recovery_correction_deg = 0.0;
+        double path_recovery_balance_error = 0.0;
+        double path_recovery_dynamic_gain = 0.0;
+        double path_recovery_fast_recenter_boost = 0.0;
+        double path_recovery_final_deg = 0.0;
         double combined_return_correction_deg = 0.0;
+        bool combined_return_correction_limited_by_tail = false;
+        double return_to_path_progress_score = 0.0;
+        bool return_to_path_near_reference = false;
         bool tail_clearance_complete = false;
         bool tail_clearance_blocking = false;
         bool path_recovery_ready = false;
@@ -375,6 +411,8 @@ private:
         double tail_post_clear_progress_m = 0.0;
         int return_heading_ticks = 0;
         int return_to_path_settle_ticks = 0;
+        int return_to_path_exit_ticks = 0;
+        bool return_to_path_settling = false;
         TurnDirection pending_override_direction = TurnDirection::Straight;
         int pending_override_ticks = 0;
     };
@@ -552,6 +590,8 @@ private:
     bool tailClearanceComplete(const SensorSnapshot& snapshot) const;
     double pathRecoveryCorrectionDeg(
         const SnapshotAssessment& assessment,
+        double gain_deg_per_m,
+        double max_correction_deg,
         DebugInfo& debug) const;
     double avoidanceSteeringSlewDegPerTick(double front_nearest_m) const;
     void resetSteeringSmoothing();

@@ -758,6 +758,8 @@ AutoAvoidController::Command AutoAvoidController::decideActiveAvoidanceStage(
         active_avoidance_state_.stage = AvoidanceStage::ReturnHeading;
         active_avoidance_state_.return_heading_ticks = 0;
         active_avoidance_state_.return_to_path_settle_ticks = 0;
+        active_avoidance_state_.return_to_path_exit_ticks = 0;
+        active_avoidance_state_.return_to_path_settling = false;
     }
 
     if (active_avoidance_state_.stage == AvoidanceStage::ReturnHeading) {
@@ -933,6 +935,16 @@ bool AutoAvoidController::tryContinueReturnHeadingStage(
     const SnapshotAssessment& assessment,
     DebugInfo debug,
     Command& command) {
+    auto normalizedErrorRatio = [](double value, double scale) {
+        if (!std::isfinite(value)) {
+            return 0.0;
+        }
+        return std::clamp(
+            std::abs(value) / std::max(1e-6, scale),
+            0.0,
+            1.0);
+    };
+
     const int protect_ticks = std::max(0, config_.return_heading_min_hold_ticks);
     const bool protected_phase =
         active_avoidance_state_.return_heading_ticks < protect_ticks;
@@ -948,26 +960,169 @@ bool AutoAvoidController::tryContinueReturnHeadingStage(
     const bool front_clear_enough = frontClearEnoughForPathRecovery(assessment.snapshot);
     const bool tail_clearance_complete = tailClearanceComplete(assessment.snapshot);
     const bool tail_clearance_blocking = !tail_clearance_complete;
-    const double return_heading_kp =
-        config_.return_heading_kp * (protected_phase ? 1.20 : 1.0);
+    const double current_side_balance = sideBalanceFromAssessment(assessment);
+    const double path_recovery_balance_error =
+        path_reference_state_.valid ?
+            current_side_balance - path_reference_state_.reference_side_balance :
+            0.0;
+    const double yaw_error_deg =
+        normalizeAngleErrorDeg(reference_yaw_deg - assessment.snapshot.yaw_deg);
+    const double fast_balance_error_m = std::max(
+        config_.return_to_path_near_reference_balance_error_m,
+        config_.return_to_path_fast_recenter_balance_error_m);
+    const double fast_yaw_error_deg = std::max(
+        config_.return_to_path_near_reference_yaw_error_deg,
+        config_.return_to_path_fast_recenter_yaw_error_deg);
+    const double near_reference_balance_error_m =
+        std::max(0.0, config_.return_to_path_near_reference_balance_error_m);
+    const double near_reference_yaw_error_deg =
+        std::max(0.0, config_.return_to_path_near_reference_yaw_error_deg);
+    const double settle_balance_error_m = std::max(
+        std::max(0.0, config_.return_to_path_balance_tolerance_m),
+        std::max(0.0, config_.return_to_path_settle_balance_error_m));
+    const double settle_yaw_error_deg = std::max(
+        std::max(0.0, config_.return_heading_tolerance_deg),
+        std::max(0.0, config_.return_to_path_settle_yaw_error_deg));
+    const double settling_hold_balance_error_m = std::max(
+        settle_balance_error_m,
+        std::max(0.0, config_.return_to_path_settling_hold_balance_error_m));
+    const double settling_hold_yaw_error_deg = std::max(
+        settle_yaw_error_deg,
+        std::max(0.0, config_.return_to_path_settling_hold_yaw_error_deg));
+    const bool path_near_reference =
+        !path_reference_state_.valid ||
+        std::abs(path_recovery_balance_error) <= near_reference_balance_error_m;
+    const bool yaw_near_reference =
+        std::abs(yaw_error_deg) <= near_reference_yaw_error_deg;
+    const bool return_to_path_near_reference =
+        path_near_reference && yaw_near_reference;
+    const bool path_recovery_settled =
+        !path_reference_state_.valid ||
+        std::abs(path_recovery_balance_error) <= settle_balance_error_m;
+    const bool return_to_path_can_settle =
+        front_clear_enough &&
+        path_recovery_settled &&
+        std::abs(yaw_error_deg) <= settle_yaw_error_deg;
+    const bool can_hold_settling =
+        front_clear_enough &&
+        (!path_reference_state_.valid ||
+            std::abs(path_recovery_balance_error) <= settling_hold_balance_error_m) &&
+        std::abs(yaw_error_deg) <= settling_hold_yaw_error_deg;
+    const int settle_entry_ticks =
+        std::max(1, config_.return_to_path_settle_entry_ticks);
+    const bool was_settling = active_avoidance_state_.return_to_path_settling;
+    if (return_to_path_can_settle) {
+        ++active_avoidance_state_.return_to_path_settle_ticks;
+    } else if (!was_settling || !can_hold_settling) {
+        active_avoidance_state_.return_to_path_settle_ticks = 0;
+    } else {
+        active_avoidance_state_.return_to_path_settle_ticks = std::max(
+            active_avoidance_state_.return_to_path_settle_ticks,
+            settle_entry_ticks);
+    }
+    bool return_to_path_settling_active = was_settling;
+    if (!return_to_path_settling_active &&
+        active_avoidance_state_.return_to_path_settle_ticks >= settle_entry_ticks) {
+        return_to_path_settling_active = true;
+    }
+    if (return_to_path_settling_active && !can_hold_settling) {
+        return_to_path_settling_active = false;
+        active_avoidance_state_.return_to_path_settle_ticks = 0;
+    }
+    active_avoidance_state_.return_to_path_settling = return_to_path_settling_active;
+    const bool return_to_path_fast_recenter_active =
+        !return_to_path_settling_active;
+    const double balance_gap =
+        path_reference_state_.valid ?
+            normalizedErrorRatio(path_recovery_balance_error, fast_balance_error_m) :
+            0.0;
+    const double yaw_gap =
+        normalizedErrorRatio(yaw_error_deg, fast_yaw_error_deg);
+    const double return_to_path_progress_score = std::clamp(
+        1.0 - (path_reference_state_.valid ? (balance_gap * 0.65 + yaw_gap * 0.35) : yaw_gap),
+        0.0,
+        1.0);
+    const bool yaw_recovery_retained_by_path =
+        path_reference_state_.valid &&
+        std::abs(path_recovery_balance_error) >
+            std::max(
+                settle_balance_error_m,
+                near_reference_balance_error_m) &&
+        std::abs(yaw_error_deg) <= fast_yaw_error_deg;
+    double yaw_recovery_dynamic_gain =
+        std::max(0.0, config_.return_heading_kp) *
+        (return_to_path_fast_recenter_active ?
+            std::max(0.0, config_.return_to_path_yaw_fast_gain_scale) :
+            std::max(0.0, config_.return_to_path_yaw_settling_gain_scale));
+    if (protected_phase) {
+        yaw_recovery_dynamic_gain *= 1.10;
+    }
+    if (yaw_recovery_retained_by_path) {
+        yaw_recovery_dynamic_gain *=
+            std::max(0.0, config_.return_to_path_yaw_retained_gain_scale);
+    }
+    const double yaw_gain_shape =
+        return_to_path_settling_active ?
+            (0.28 + 0.72 * yaw_gap) :
+            (0.85 + 0.35 * std::max(yaw_gap, balance_gap));
+    yaw_recovery_dynamic_gain *= yaw_gain_shape;
+    if (return_to_path_settling_active && path_recovery_settled) {
+        yaw_recovery_dynamic_gain *= 0.75;
+    }
     const double return_heading_max_correction_deg =
         std::min(
             Judgment::kMaxSteeringAngleDeg,
-            config_.straight_heading_max_correction_deg + (protected_phase ? 0.8 : 0.0));
+            config_.straight_heading_max_correction_deg +
+                (protected_phase ? 0.8 : 0.0) +
+                (return_to_path_fast_recenter_active ? 1.0 : 0.0));
     double yaw_recovery_correction_deg = headingCorrectionDegForTarget(
         assessment.snapshot.yaw_deg,
         reference_yaw_deg,
-        return_heading_kp,
+        yaw_recovery_dynamic_gain,
         return_heading_max_correction_deg,
-        config_.return_heading_tolerance_deg);
+        return_to_path_settling_active ?
+            near_reference_yaw_error_deg :
+            0.0);
     const bool path_recovery_ready =
-        path_reference_state_.valid && front_clear_enough && tail_clearance_complete;
+        path_reference_state_.valid && front_clear_enough;
+    double path_recovery_fast_recenter_boost = 0.0;
+    double path_recovery_dynamic_gain = 0.0;
     double path_recovery_correction_deg = 0.0;
     if (path_recovery_ready) {
-        path_recovery_correction_deg = pathRecoveryCorrectionDeg(assessment, debug);
+        const double fast_boost_ratio =
+            return_to_path_fast_recenter_active ?
+                (1.0 - return_to_path_progress_score) *
+                    std::max(0.0, config_.return_to_path_balance_fast_boost_ratio) :
+                0.0;
+        const double gain_scale =
+            return_to_path_fast_recenter_active ?
+                std::max(0.0, config_.return_to_path_balance_fast_gain_scale) :
+                std::max(0.0, config_.return_to_path_balance_settling_gain_scale);
+        const double path_error_gain_scale =
+            return_to_path_settling_active ?
+                (0.25 + 0.75 * balance_gap) :
+                (0.55 + 0.85 * balance_gap);
+        path_recovery_fast_recenter_boost = fast_boost_ratio;
+        path_recovery_dynamic_gain =
+            std::max(0.0, config_.return_to_path_balance_gain_deg_per_m) *
+            gain_scale *
+            path_error_gain_scale *
+            (1.0 + fast_boost_ratio);
+        const double path_recovery_max_correction_deg =
+            return_to_path_fast_recenter_active ?
+                std::max(
+                    std::max(0.0, config_.return_to_path_balance_max_correction_deg),
+                    std::max(0.0, config_.return_to_path_balance_fast_max_correction_deg)) :
+                std::max(0.0, config_.return_to_path_balance_max_correction_deg);
+        path_recovery_correction_deg = pathRecoveryCorrectionDeg(
+            assessment,
+            path_recovery_dynamic_gain,
+            path_recovery_max_correction_deg,
+            debug);
     }
     double combined_return_correction_deg =
         yaw_recovery_correction_deg + path_recovery_correction_deg;
+    bool combined_return_correction_limited_by_tail = false;
 
     if (tail_clearance_blocking && hasCommittedAvoidanceTurn()) {
         const bool opposite_pull =
@@ -975,34 +1130,116 @@ bool AutoAvoidController::tryContinueReturnHeadingStage(
                 combined_return_correction_deg > 0.0) ||
             (active_avoidance_state_.committed_direction == TurnDirection::Right &&
                 combined_return_correction_deg < 0.0);
-        if (opposite_pull) {
-            combined_return_correction_deg = 0.0;
+        if (opposite_pull && std::abs(combined_return_correction_deg) > 0.001) {
+            const double tail_limit_base_scale = std::clamp(
+                config_.return_to_path_tail_blocking_limit_scale,
+                0.0,
+                1.0);
+            const double tail_release_progress_score = std::clamp(
+                config_.return_to_path_tail_release_progress_score,
+                0.0,
+                0.98);
+            const double tail_release_limit_scale = std::clamp(
+                std::max(
+                    tail_limit_base_scale,
+                    std::max(0.0, config_.return_to_path_tail_release_limit_scale)),
+                0.0,
+                1.0);
+            double tail_limit_scale = tail_limit_base_scale;
+            if (return_to_path_progress_score > tail_release_progress_score) {
+                const double release_ratio =
+                    (return_to_path_progress_score - tail_release_progress_score) /
+                    std::max(1e-6, 1.0 - tail_release_progress_score);
+                tail_limit_scale = std::max(
+                    tail_limit_scale,
+                    tail_limit_base_scale +
+                        release_ratio * (tail_release_limit_scale - tail_limit_base_scale));
+            }
+            if (return_to_path_settling_active) {
+                tail_limit_scale = std::max(tail_limit_scale, tail_release_limit_scale);
+            }
+            double limited_magnitude =
+                std::abs(combined_return_correction_deg) *
+                tail_limit_scale;
+            const double tail_min_correction_deg =
+                return_to_path_fast_recenter_active ?
+                    std::max(0.0, config_.return_to_path_tail_blocking_min_correction_deg) :
+                    std::min(
+                        std::max(0.0, config_.return_to_path_exit_correction_deg),
+                        std::max(
+                            0.0,
+                            config_.return_to_path_tail_blocking_min_correction_deg) *
+                            0.5);
+            if (tail_min_correction_deg > 0.0) {
+                limited_magnitude = std::max(
+                    limited_magnitude,
+                    std::min(
+                        std::abs(combined_return_correction_deg),
+                        tail_min_correction_deg));
+            }
+            if (limited_magnitude + 1e-6 < std::abs(combined_return_correction_deg)) {
+                combined_return_correction_deg =
+                    std::copysign(limited_magnitude, combined_return_correction_deg);
+                combined_return_correction_limited_by_tail = true;
+            }
         }
     }
 
-    const double side_balance_error_m =
-        path_reference_state_.valid ?
-            std::abs(
-                sideBalanceFromAssessment(assessment) -
-                path_reference_state_.reference_side_balance) :
-            0.0;
-    const bool yaw_recovered =
-        std::isfinite(reference_yaw_deg) &&
-        std::abs(
-            normalizeAngleErrorDeg(reference_yaw_deg - assessment.snapshot.yaw_deg)) <=
-            std::max(0.0, config_.return_heading_tolerance_deg);
-    const bool path_recovery_settled =
-        !path_reference_state_.valid ||
-        side_balance_error_m <= std::max(0.0, config_.return_to_path_balance_tolerance_m);
-    const bool exit_to_idle_ready =
+    const bool combined_return_correction_small =
+        std::abs(combined_return_correction_deg) <=
+        std::max(0.0, config_.return_to_path_exit_correction_deg);
+    const bool exit_candidate =
         front_clear_enough &&
+        return_to_path_settling_active &&
+        return_to_path_near_reference &&
+        path_recovery_settled &&
         tail_clearance_complete &&
-        yaw_recovered &&
-        path_recovery_settled;
-    if (exit_to_idle_ready) {
-        ++active_avoidance_state_.return_to_path_settle_ticks;
+        combined_return_correction_small;
+    if (exit_candidate) {
+        ++active_avoidance_state_.return_to_path_exit_ticks;
     } else {
-        active_avoidance_state_.return_to_path_settle_ticks = 0;
+        active_avoidance_state_.return_to_path_exit_ticks = 0;
+    }
+    const int exit_confirm_ticks =
+        std::max(1, config_.return_to_path_settle_confirm_ticks);
+    const bool exit_to_idle_ready =
+        active_avoidance_state_.return_to_path_exit_ticks >= exit_confirm_ticks;
+    std::string return_to_path_blocked_reason = "none";
+    if (!return_to_path_settling_active) {
+        if (!front_clear_enough) {
+            return_to_path_blocked_reason = "front_not_clear";
+        } else if (!return_to_path_can_settle) {
+            if (std::abs(yaw_error_deg) > settle_yaw_error_deg) {
+                return_to_path_blocked_reason = "yaw_not_ready_for_settling";
+            } else if (path_reference_state_.valid && !path_recovery_settled) {
+                return_to_path_blocked_reason = "path_not_ready_for_settling";
+            } else {
+                return_to_path_blocked_reason = "waiting_for_settling_window";
+            }
+        } else if (active_avoidance_state_.return_to_path_settle_ticks < settle_entry_ticks) {
+            return_to_path_blocked_reason = "settle_confirming";
+        }
+    } else {
+        if (!front_clear_enough) {
+            return_to_path_blocked_reason = "front_not_clear";
+        } else if (!return_to_path_near_reference) {
+            if (!yaw_near_reference) {
+                return_to_path_blocked_reason = "yaw_not_near_reference";
+            } else if (path_reference_state_.valid && !path_near_reference) {
+                return_to_path_blocked_reason = "path_not_near_reference";
+            }
+        } else if (!combined_return_correction_small) {
+            return_to_path_blocked_reason = "return_correction_still_large";
+        } else if (!tail_clearance_complete) {
+            return_to_path_blocked_reason = "tail_clearance_blocking";
+        } else if (!exit_to_idle_ready) {
+            return_to_path_blocked_reason = "exit_confirming";
+        }
+    }
+    if (return_to_path_blocked_reason == "none" &&
+        combined_return_correction_limited_by_tail &&
+        tail_clearance_blocking) {
+        return_to_path_blocked_reason = "tail_limiting_return";
     }
 
     debug.state = active_avoidance_state_.stage;
@@ -1020,17 +1257,31 @@ bool AutoAvoidController::tryContinueReturnHeadingStage(
         path_reference_state_.valid ? path_reference_state_.reference_left_distance_m : 0.0;
     debug.reference_right_distance_m =
         path_reference_state_.valid ? path_reference_state_.reference_right_distance_m : 0.0;
+    debug.return_to_path_phase =
+        return_to_path_fast_recenter_active ? "fast_recenter" : "settling";
+    debug.return_to_path_fast_recenter_active = return_to_path_fast_recenter_active;
+    debug.return_to_path_settling_active = return_to_path_settling_active;
+    debug.return_to_path_can_settle = return_to_path_can_settle;
+    debug.return_to_path_blocked_reason = return_to_path_blocked_reason;
     debug.yaw_recovery_correction_deg = yaw_recovery_correction_deg;
+    debug.yaw_recovery_dynamic_gain = yaw_recovery_dynamic_gain;
+    debug.yaw_recovery_retained_by_path = yaw_recovery_retained_by_path;
+    debug.yaw_recovery_final_deg = yaw_recovery_correction_deg;
     debug.path_recovery_correction_deg = path_recovery_correction_deg;
+    debug.path_recovery_balance_error = path_recovery_balance_error;
+    debug.path_recovery_dynamic_gain = path_recovery_dynamic_gain;
+    debug.path_recovery_fast_recenter_boost = path_recovery_fast_recenter_boost;
+    debug.path_recovery_final_deg = path_recovery_correction_deg;
     debug.combined_return_correction_deg = combined_return_correction_deg;
+    debug.combined_return_correction_limited_by_tail =
+        combined_return_correction_limited_by_tail;
+    debug.return_to_path_progress_score = return_to_path_progress_score;
+    debug.return_to_path_near_reference = return_to_path_near_reference;
     debug.tail_clearance_complete = tail_clearance_complete;
     debug.tail_clearance_blocking = tail_clearance_blocking;
     debug.path_recovery_ready = path_recovery_ready;
     debug.path_recovery_settled = path_recovery_settled;
-    debug.exit_to_idle_ready =
-        exit_to_idle_ready &&
-        active_avoidance_state_.return_to_path_settle_ticks >=
-            std::max(1, config_.return_to_path_settle_confirm_ticks);
+    debug.exit_to_idle_ready = exit_to_idle_ready;
 
     if (debug.exit_to_idle_ready) {
         return false;
@@ -1420,6 +1671,8 @@ void AutoAvoidController::lockAvoidanceTurn(
         active_avoidance_state_.tail_post_clear_progress_m = 0.0;
         active_avoidance_state_.return_heading_ticks = 0;
         active_avoidance_state_.return_to_path_settle_ticks = 0;
+        active_avoidance_state_.return_to_path_exit_ticks = 0;
+        active_avoidance_state_.return_to_path_settling = false;
         active_avoidance_state_.pending_override_direction = TurnDirection::Straight;
         active_avoidance_state_.pending_override_ticks = 0;
     }
@@ -1600,16 +1853,16 @@ bool AutoAvoidController::tailClearanceComplete(
 
 double AutoAvoidController::pathRecoveryCorrectionDeg(
     const SnapshotAssessment& assessment,
+    double gain_deg_per_m,
+    double max_correction_deg,
     DebugInfo& debug) const {
     if (!path_reference_state_.valid) {
         return 0.0;
     }
 
-    const double gain =
-        std::max(0.0, config_.return_to_path_balance_gain_deg_per_m);
-    const double max_correction_deg =
-        std::max(0.0, config_.return_to_path_balance_max_correction_deg);
-    if (gain <= 0.0 || max_correction_deg <= 0.0) {
+    const double gain = std::max(0.0, gain_deg_per_m);
+    const double max_correction = std::max(0.0, max_correction_deg);
+    if (gain <= 0.0 || max_correction <= 0.0) {
         return 0.0;
     }
 
@@ -1618,8 +1871,8 @@ double AutoAvoidController::pathRecoveryCorrectionDeg(
         current_side_balance - path_reference_state_.reference_side_balance;
     const double correction_deg = std::clamp(
         gain * balance_error_m,
-        -max_correction_deg,
-        max_correction_deg);
+        -max_correction,
+        max_correction);
     if (std::abs(correction_deg) < 0.05) {
         return 0.0;
     }
@@ -2450,9 +2703,42 @@ std::string AutoAvoidController::formatDebugText(const DebugInfo& debug) const {
     }
     if (debug.return_to_path_active) {
         out << ", return_to_path=1"
-            << ", yaw_recovery=" << format_number(debug.yaw_recovery_correction_deg, 2)
-            << ", path_recovery=" << format_number(debug.path_recovery_correction_deg, 2)
+            << ", return_phase="
+            << (debug.return_to_path_phase.empty() ? "n/a" : debug.return_to_path_phase)
+            << ", return_progress="
+            << format_number(debug.return_to_path_progress_score, 2)
+            << ", yaw_recovery=" << format_number(debug.yaw_recovery_final_deg, 2)
+            << "@g=" << format_number(debug.yaw_recovery_dynamic_gain, 2)
+            << ", path_recovery=" << format_number(debug.path_recovery_final_deg, 2)
+            << "@err=" << format_number(debug.path_recovery_balance_error, 2)
+            << "/g=" << format_number(debug.path_recovery_dynamic_gain, 2)
             << ", return_combined=" << format_number(debug.combined_return_correction_deg, 2);
+        if (debug.return_to_path_fast_recenter_active) {
+            out << ", fast_recenter=1";
+        }
+        if (debug.return_to_path_settling_active) {
+            out << ", settling=1";
+        }
+        if (debug.return_to_path_can_settle) {
+            out << ", can_settle=1";
+        }
+        if (debug.yaw_recovery_retained_by_path) {
+            out << ", yaw_retained_by_path=1";
+        }
+        if (debug.path_recovery_fast_recenter_boost > 0.001) {
+            out << ", path_boost="
+                << format_number(debug.path_recovery_fast_recenter_boost, 2);
+        }
+        if (debug.combined_return_correction_limited_by_tail) {
+            out << ", return_tail_limit=1";
+        }
+        if (debug.return_to_path_near_reference) {
+            out << ", near_reference=1";
+        }
+        if (!debug.return_to_path_blocked_reason.empty() &&
+            debug.return_to_path_blocked_reason != "none") {
+            out << ", return_blocked=" << debug.return_to_path_blocked_reason;
+        }
         if (debug.boundary_recovery_and_path_aligned) {
             out << ", boundary_path=aligned";
         }
