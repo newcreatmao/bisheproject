@@ -173,6 +173,7 @@ private:
     std::chrono::steady_clock::time_point latest_rgb_yolo_received_steady_{};
     std::string active_workspace_mode_ = "STOP";
     bool manual_workspace_working_ = false;
+    bool avoidance_start_ack_pending_ = false;
     VehicleCommandState vehicle_command_state_;
     AutoAvoidRuntimeState auto_avoid_runtime_state_;
 };

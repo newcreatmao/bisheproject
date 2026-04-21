@@ -40,10 +40,14 @@ constexpr std::chrono::seconds kSensorFreshWindow(3);
 constexpr std::chrono::seconds kSensorStartupGrace(10);
 constexpr std::chrono::seconds kStartupInfoWindow(18);
 constexpr std::chrono::milliseconds kRuntimeLogPollInterval(400);
-constexpr std::chrono::milliseconds kAutoAvoidCommandMinInterval(80);
+// 20 Hz auto-avoid loop: allow steering-only resend on roughly every control tick.
+constexpr std::chrono::milliseconds kAutoAvoidCommandMinInterval(40);
 constexpr std::size_t kRuntimeBootstrapLineCount = 120;
-constexpr int kAutoAvoidSteeringResendThreshold = 12;
+// 20 Hz auto-avoid loop: smaller per-tick steering deltas should still be dispatched.
+constexpr int kAutoAvoidSteeringResendThreshold = 6;
 constexpr int kAutoAvoidSpeedResendThreshold = 2;
+// 20 Hz auto-avoid loop period while preserving the existing sleep_until pacing model.
+constexpr std::chrono::milliseconds kAutoAvoidControlPeriod(50);
 constexpr double kDepthNoObstacleDistanceMeters = 999.0;
 constexpr double kDepthMinValidMeters = 0.50;
 constexpr double kDepthNoDataFloorEpsilonMeters = 0.005;
@@ -1448,6 +1452,7 @@ void LogDashboardServer::configureRoutes() {
             return;
         }
 
+        bool cleared_avoidance_start_ack_pending = false;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             active_workspace_mode_ = target_mode;
@@ -1455,9 +1460,17 @@ void LogDashboardServer::configureRoutes() {
                 manual_workspace_working_ = false;
             }
             if (current_mode == "AVOIDANCE" && target_mode != "AVOIDANCE") {
+                cleared_avoidance_start_ack_pending = avoidance_start_ack_pending_;
+                avoidance_start_ack_pending_ = false;
                 vehicle_command_state_.has_speed = true;
                 vehicle_command_state_.speed = 0;
             }
+        }
+
+        if (cleared_avoidance_start_ack_pending) {
+            log_info(
+                kLogModule,
+                std::string("workspace switched away from avoidance; cleared start ACK pending state"));
         }
 
         std::ostringstream out;
@@ -1718,11 +1731,108 @@ void LogDashboardServer::configureRoutes() {
     server_.Post("/api/stm32/angle", [handleStm32ValueDirect](const httplib::Request& req, httplib::Response& res) {
         handleStm32ValueDirect(req, res, "angle", "#C2=", "value", -230, 230, &ToStm::sendAngle);
     });
-    server_.Post("/api/avoidance/start", [this, handleAvoidanceTaskDirect](const httplib::Request& req, httplib::Response& res) {
-        const bool ok = handleAvoidanceTaskDirect(req, res, "avoidance_start", "#C3=1!", &ToStm::sendStartWaitOk);
-        if (ok) {
+    server_.Post("/api/avoidance/start", [this, setJson](const httplib::Request&, httplib::Response& res) {
+        bool ready = false;
+        {
+            std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
+            ready = static_cast<bool>(to_stm_);
+        }
+        if (!ready) {
+            setJson(
+                res,
+                503,
+                "{\"ok\":false,\"message\":\"STM32 未初始化\",\"status\":\"failed_not_ready\"}");
+            return;
+        }
+
+        std::string active_mode;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            active_mode = active_workspace_mode_;
+        }
+        if (active_mode != "AVOIDANCE") {
+            setJson(
+                res,
+                409,
+                "{\"ok\":false,\"message\":\"当前不在避障工作区\",\"status\":\"wrong_workspace\"}");
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            avoidance_start_ack_pending_ = true;
+        }
+        log_info(
+            kLogModule,
+            "avoidance start requested; awaiting start ACK before entering working mode");
+
+        bool ok = false;
+        {
+            std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
+            if (to_stm_) {
+                UartTraceContext trace_context;
+                trace_context.source = "avoidance_start";
+                trace_context.thread_tag = "api_handler";
+                ScopedUartTraceContext trace_scope(trace_context);
+                ok = to_stm_->sendStartWaitOk();
+            }
+        }
+
+        bool enter_working_mode = false;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            enter_working_mode =
+                ok &&
+                avoidance_start_ack_pending_ &&
+                active_workspace_mode_ == "AVOIDANCE";
+            avoidance_start_ack_pending_ = false;
+        }
+
+        if (enter_working_mode) {
             auto_avoid_stm32_drive_enabled_.store(true);
             startAutoAvoidControl();
+            log_info(
+                kLogModule,
+                "avoidance start ACK confirmed; entering working mode");
+            setJson(
+                res,
+                200,
+                stm32DirectResultJson(
+                    "avoidance_start",
+                    "#C3=1!",
+                    true,
+                    "sent",
+                    "避障任务指令已发送"));
+            return;
+        }
+
+        auto_avoid_stm32_drive_enabled_.store(false);
+        if (ok) {
+            log_warn(
+                kLogModule,
+                "avoidance start ACK confirmed after pending state cleared; staying out of working mode");
+            setJson(
+                res,
+                409,
+                stm32DirectResultJson(
+                    "avoidance_start",
+                    "#C3=1!",
+                    false,
+                    "start_canceled",
+                    "start ACK 已收到，但未进入工作模式"));
+        } else {
+            log_warn(
+                kLogModule,
+                "avoidance start ACK failed; start not confirmed, staying out of working mode");
+            setJson(
+                res,
+                500,
+                stm32DirectResultJson(
+                    "avoidance_start",
+                    "#C3=1!",
+                    false,
+                    "failed_send",
+                    "STM32 发送失败"));
         }
     });
     server_.Post("/api/avoidance/stop", [this, handleAvoidanceTaskDirect](const httplib::Request& req, httplib::Response& res) {
@@ -1840,15 +1950,26 @@ void LogDashboardServer::startAutoAvoidControl() {
 }
 
 void LogDashboardServer::stopAutoAvoidControl() {
-    auto_avoid_controller_.reset();
-    if (!auto_avoid_control_running_.exchange(false)) {
-        return;
+    bool cleared_start_ack_pending = false;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (avoidance_start_ack_pending_) {
+            avoidance_start_ack_pending_ = false;
+            cleared_start_ack_pending = true;
+        }
     }
+    auto_avoid_controller_.reset();
+    const bool was_running = auto_avoid_control_running_.exchange(false);
 
-    if (auto_avoid_control_thread_.joinable()) {
+    if (was_running && auto_avoid_control_thread_.joinable()) {
         auto_avoid_control_thread_.join();
     }
-    log_info(kLogModule, "auto avoidance control loop stopped");
+    if (cleared_start_ack_pending) {
+        log_info(kLogModule, "avoidance start ACK pending cleared while stopping/exiting");
+    }
+    if (was_running) {
+        log_info(kLogModule, "auto avoidance control loop stopped");
+    }
 }
 
 AutoAvoidController::SensorSnapshot LogDashboardServer::autoAvoidSensorSnapshot() const {
@@ -2079,7 +2200,7 @@ void LogDashboardServer::runAutoAvoidControlLoop() {
 
     while (auto_avoid_control_running_.load()) {
         const auto cycle_start = std::chrono::steady_clock::now();
-        next_tick += 100ms;
+        next_tick += kAutoAvoidControlPeriod;
         ++control_cycle_id;
 
         std::string active_mode;
@@ -2672,6 +2793,7 @@ std::string LogDashboardServer::stateJson() const {
     std::chrono::steady_clock::time_point rgb_yolo_received_steady;
     std::string active_workspace_mode;
     bool manual_workspace_working = false;
+    bool avoidance_start_ack_pending = false;
     VehicleCommandState vehicle_command_state;
     AutoAvoidRuntimeState auto_avoid_runtime_state;
     {
@@ -2684,6 +2806,7 @@ std::string LogDashboardServer::stateJson() const {
         rgb_yolo_received_steady = latest_rgb_yolo_received_steady_;
         active_workspace_mode = active_workspace_mode_;
         manual_workspace_working = manual_workspace_working_;
+        avoidance_start_ack_pending = avoidance_start_ack_pending_;
         vehicle_command_state = vehicle_command_state_;
         auto_avoid_runtime_state = auto_avoid_runtime_state_;
     }
@@ -2767,6 +2890,9 @@ std::string LogDashboardServer::stateJson() const {
         }
 
         if (active_workspace_mode == "AVOIDANCE") {
+            if (avoidance_start_ack_pending) {
+                return deviceStateJson("started", "已启动 / 等待避障 start ACK");
+            }
             if (auto_avoid_control_running_.load() || auto_avoid_stm32_drive_enabled_.load()) {
                 return deviceStateJson("started", "已启动 / 避障工作区控制中");
             }
@@ -2802,26 +2928,18 @@ std::string LogDashboardServer::stateJson() const {
         lidar_state.valid_points > 0 &&
         lidar_state.message_count > 0 &&
         (now_steady - lidar_state.last_message_steady_) <= kSensorFreshWindow;
-    bool nearest_valid = false;
-    std::string nearest_source;
-    std::string nearest_zone;
-    double nearest_distance_m = 0.0;
-    double nearest_angle_deg = 0.0;
-    bool nearest_has_angle = false;
-    if (depth_key_valid) {
-        nearest_valid = true;
-        nearest_source = "深度相机";
-        nearest_zone = depth_state.nearest_zone;
-        nearest_distance_m = depth_state.nearest_m;
-    }
-    if (lidar_key_valid && (!nearest_valid || lidar_state.nearest_m < nearest_distance_m)) {
-        nearest_valid = true;
-        nearest_source = "雷达";
-        nearest_zone.clear();
-        nearest_distance_m = lidar_state.nearest_m;
-        nearest_angle_deg = lidar_state.nearest_angle_deg;
-        nearest_has_angle = true;
-    }
+    const bool nearest_valid =
+        lidar_key_valid && lidar_state.auto_avoid_front_sector.valid &&
+        std::isfinite(lidar_state.auto_avoid_front_sector.nearest_m);
+    const std::string nearest_source = "避障区雷达";
+    const std::string nearest_zone =
+        nearest_valid ? lidar_state.front_nearest_zone : std::string();
+    const double nearest_distance_m =
+        nearest_valid ? lidar_state.auto_avoid_front_sector.nearest_m : 0.0;
+    const double nearest_angle_deg =
+        nearest_valid ? lidar_state.auto_avoid_front_sector.nearest_angle_deg : 0.0;
+    const bool nearest_has_angle =
+        nearest_valid && std::isfinite(lidar_state.auto_avoid_front_sector.nearest_angle_deg);
 
     std::ostringstream out;
     out << "{"
@@ -2902,6 +3020,7 @@ std::string LogDashboardServer::stateJson() const {
         << "},"
         << "\"auto_avoid\":{"
         << "\"active\":" << boolJson(auto_avoid_runtime_state.active) << ","
+        << "\"awaiting_start_ack\":" << boolJson(avoidance_start_ack_pending) << ","
         << "\"has_decision\":" << boolJson(auto_avoid_runtime_state.has_decision) << ","
         << "\"control_cycle_id\":" << auto_avoid_runtime_state.last_control_cycle_id << ","
         << "\"snapshot_valid\":" << boolJson(auto_avoid_runtime_state.snapshot_valid) << ","

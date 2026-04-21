@@ -330,6 +330,97 @@
       line-height: 1;
     }
 
+    .avoidance-metric {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas:
+        "title badge"
+        "reading badge"
+        "meta badge";
+      gap: 10px 12px;
+      align-items: start;
+    }
+
+    .avoidance-metric-head {
+      grid-area: title;
+      min-width: 0;
+    }
+
+    .avoidance-metric-head h3 {
+      margin: 0;
+    }
+
+    .avoidance-caption {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .avoidance-badge {
+      grid-area: badge;
+      align-self: start;
+    }
+
+    .avoidance-reading {
+      grid-area: reading;
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      min-height: 46px;
+    }
+
+    .avoidance-value {
+      margin: 0;
+      font-size: 36px;
+      line-height: 0.95;
+      letter-spacing: -0.03em;
+    }
+
+    .avoidance-status {
+      margin: 0;
+      font-size: 13px;
+      color: #b5c9ea;
+      white-space: nowrap;
+    }
+
+    .avoidance-meta {
+      grid-area: meta;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .avoidance-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.05);
+      border: 1px solid rgba(255,255,255,.06);
+      color: #c8d7ef;
+      font-size: 12px;
+      line-height: 1;
+    }
+
+    .avoidance-pill strong {
+      margin: 0;
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1;
+    }
+
+    .avoidance-pill.zone {
+      background: linear-gradient(135deg, rgba(77,163,255,.16), rgba(77,163,255,.08));
+      border-color: rgba(77,163,255,.22);
+    }
+
+    .avoidance-pill.angle {
+      background: linear-gradient(135deg, rgba(245,178,59,.14), rgba(245,178,59,.07));
+      border-color: rgba(245,178,59,.20);
+    }
+
     .badge {
       display: inline-flex;
       align-items: center;
@@ -797,7 +888,23 @@
         <section class="grid summary">
           <div class="card"><div class="card-body metric"><div><h3>系统状态</h3><strong id="system-state">已停止</strong></div><span class="badge warn" id="system-badge">OFFLINE</span></div></div>
           <div class="card"><div class="card-body metric"><div><h3>当前模式</h3><strong id="mode-text">停止</strong></div><span class="badge" id="mode-badge">STOP</span></div></div>
-          <div class="card"><div class="card-body metric"><div><h3>避障观测</h3><strong id="avoidance-state">等待观测</strong></div><span class="badge warn">DEPTH + LIDAR</span></div></div>
+          <div class="card">
+            <div class="card-body avoidance-metric">
+              <div class="avoidance-metric-head">
+                <h3>避障观测</h3>
+                <p class="avoidance-caption" id="avoidance-caption">前向避障区最近障碍</p>
+              </div>
+              <span class="badge warn avoidance-badge">LIDAR -58°~58°</span>
+              <div class="avoidance-reading">
+                <strong class="avoidance-value" id="avoidance-state">--</strong>
+                <span class="avoidance-status" id="avoidance-status">等待观测</span>
+              </div>
+              <div class="avoidance-meta">
+                <span class="avoidance-pill zone">区域 <strong id="avoidance-zone-pill">--</strong></span>
+                <span class="avoidance-pill angle">角度 <strong id="avoidance-angle-pill">--</strong></span>
+              </div>
+            </div>
+          </div>
           <div class="card"><div class="card-body metric"><div><h3>识别显示链</h3><strong id="recognition-count">0 个目标</strong></div><span class="badge">RGB + YOLO</span></div></div>
         </section>
 
@@ -931,7 +1038,7 @@
                     <div class="row"><span class="label">姿态角</span><strong id="attitude-text">--</strong></div>
                     <div class="row"><span class="label">深度相机最近障碍</span><strong id="depth-nearest-obstacle">--</strong></div>
                     <div class="row"><span class="label">雷达最小距离</span><strong id="lidar-nearest-obstacle">--</strong></div>
-                    <div class="row"><span class="label">最近空间障碍物</span><strong id="nearest-obstacle">--</strong></div>
+                    <div class="row"><span class="label">避障区最近障碍</span><strong id="nearest-obstacle">--</strong></div>
                     <div class="row"><span class="label">车辆真实速度</span><strong id="vehicle-speed-text">--</strong></div>
                     <div class="row"><span class="label">车辆角度值</span><strong id="vehicle-angle-text">--</strong></div>
                   </div>
@@ -1143,7 +1250,11 @@
 	      setText('depth-module-state', defaultDeviceTexts.depth_camera);
 	      setText('rgb-module-state', defaultDeviceTexts.rgb_yolo);
 	      setText('stm32-state', defaultDeviceTexts.stm32);
-	      setText('avoidance-state', '等待观测');
+	      setText('avoidance-state', '--');
+	      setText('avoidance-status', '等待观测');
+	      setText('avoidance-caption', '前向避障区最近障碍');
+	      setText('avoidance-zone-pill', '--');
+	      setText('avoidance-angle-pill', '--');
 	      setText('depth-nearest-bound', '--');
 	      setText('depth-ratio-bound', '--');
 	      setText('lidar-front-bound', '--');
@@ -1232,6 +1343,16 @@
 	      return '';
 	    }
 
+	    function frontZoneLabel(zone, angleDeg) {
+	      if (typeof zone === 'string') {
+	        const normalized = zone.trim().toLowerCase();
+	        if (normalized === 'left' || normalized === '左') return '左';
+	        if (normalized === 'center' || normalized === '中') return '中';
+	        if (normalized === 'right' || normalized === '右') return '右';
+	      }
+	      return frontZoneFromAngle(angleDeg);
+	    }
+
 	    function stabilizedLidarSector(key, sector) {
 	      const slot = lidarSectorDisplayState[key];
 	      if (!slot) {
@@ -1318,13 +1439,25 @@
 
 	      const nearestAngle = finiteNumber(nearest.angle_deg);
 	      const nearestDistance = finiteNumber(nearest.distance_m);
-	      const nearestZone = typeof nearest.zone === 'string' ? nearest.zone : '';
+	      const nearestZone = frontZoneLabel(nearest.zone, nearestAngle);
 	      setText('nearest-obstacle', nearest.valid && nearestDistance !== null
-	        ? `${nearest.source || '空间'} ${nearestZone ? `${nearestZone} ` : ''}${nearestDistance.toFixed(2)} m${nearestAngle === null ? '' : ` / ${nearestAngle.toFixed(1)}°`}`
+	        ? `${nearest.source || '避障区雷达'} ${nearestZone ? `${nearestZone} ` : ''}${nearestDistance.toFixed(2)} m${nearestAngle === null ? '' : ` / ${nearestAngle.toFixed(1)}°`}`
 	        : '--');
 	      setText('avoidance-state', nearest.valid && nearestDistance !== null
-	        ? `最近 ${nearestDistance.toFixed(2)} m`
+	        ? nearestDistance.toFixed(2)
+	        : '--');
+	      setText('avoidance-status', nearest.valid && nearestDistance !== null
+	        ? `${nearestZone ? `${nearestZone}区` : '前向区'}${nearestAngle === null ? '' : ` / ${nearestAngle.toFixed(1)}°`}`
 	        : '等待观测');
+	      setText('avoidance-caption', nearest.valid && nearestDistance !== null
+	        ? (nearest.source || '避障区雷达')
+	        : '前向避障区最近障碍');
+	      setText('avoidance-zone-pill', nearest.valid && nearestDistance !== null
+	        ? (nearestZone || '--')
+	        : '--');
+	      setText('avoidance-angle-pill', nearest.valid && nearestDistance !== null && nearestAngle !== null
+	        ? `${nearestAngle.toFixed(1)}°`
+	        : '--');
 	      setText('vehicle-speed-text', vehicle.speed_valid ? `${vehicle.speed} cm/s` : '--');
 	      setText('vehicle-angle-text', vehicle.angle_valid ? vehicleAngleText(vehicle.angle) : '--');
 	    }
