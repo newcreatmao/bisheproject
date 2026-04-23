@@ -788,6 +788,7 @@ private:
           bbox_h = best.box.height;
           class_name = classNameForDetection(best, yolo_labels_);
           last_detection_time_ = frame_time;
+          saveDetectionPhoto(frame, detections, class_name, frame_time);
         }
       }
     } catch (const Ort::Exception & ex) {
@@ -916,49 +917,7 @@ private:
     try {
       fs::create_directories(photo_output_dir_);
 
-      cv::Mat annotated = frame.clone();
-      const cv::Scalar accent(35, 115, 230);
-      for (const auto & detection : detections) {
-        cv::rectangle(annotated, detection.box, accent, 2);
-
-        std::string class_name;
-        if (detection.class_id >= 0 && detection.class_id < static_cast<int>(yolo_labels_.size())) {
-          class_name = yolo_labels_[detection.class_id];
-        } else {
-          class_name = "id=" + std::to_string(detection.class_id);
-        }
-
-        std::ostringstream label_text;
-        label_text << class_name
-                   << " " << std::fixed << std::setprecision(2) << detection.confidence;
-        int baseline = 0;
-        const cv::Size label_size = cv::getTextSize(
-          label_text.str(),
-          cv::FONT_HERSHEY_SIMPLEX,
-          0.6,
-          2,
-          &baseline);
-        const int label_x = detection.box.x;
-        const int label_y = std::max(detection.box.y - 8, label_size.height + 8);
-        cv::rectangle(
-          annotated,
-          cv::Rect(
-            label_x,
-            label_y - label_size.height - 8,
-            label_size.width + 12,
-            label_size.height + baseline + 10),
-          accent,
-          cv::FILLED);
-        cv::putText(
-          annotated,
-          label_text.str(),
-          cv::Point(label_x + 6, label_y - 4),
-          cv::FONT_HERSHEY_SIMPLEX,
-          0.6,
-          cv::Scalar(255, 255, 255),
-          2,
-          cv::LINE_AA);
-      }
+      const cv::Mat annotated = annotatedFrame(frame, detections);
 
       const std::string class_token =
         sanitizeFilenameToken(primary_class_name.empty() ? "unknown" : primary_class_name, "unknown");
