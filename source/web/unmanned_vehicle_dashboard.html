@@ -1057,16 +1057,16 @@
                   <div class="section-head">
                     <div>
                       <h3>识别显示</h3>
-                      <p>位于控制接口下方，保留当前识别结果展示方式</p>
+                      <p>RGB实时视频流叠加YOLO框，推理数据实时显示在下方</p>
                     </div>
                     <span class="tiny-chip">bbox / class / confidence</span>
                   </div>
                   <div class="photo-preview-shell">
-                    <img id="rgb-yolo-photo-preview" class="photo-preview" alt="最近识别抓拍" hidden />
-                    <div id="rgb-yolo-photo-empty" class="empty-photo">等待识别抓拍...</div>
+                    <img id="rgb-yolo-photo-preview" class="photo-preview" alt="RGB YOLO实时视频流" hidden />
+                    <div id="rgb-yolo-photo-empty" class="empty-photo">等待实时视频流...</div>
                   </div>
                   <div class="photo-meta">
-                    <div class="footer-note" id="rgb-yolo-photo-path">照片目录等待更新...</div>
+                    <div class="footer-note" id="rgb-yolo-photo-path">实时视频流等待更新...</div>
                     <a id="rgb-yolo-photo-link" class="tiny-chip" href="#" target="_blank" rel="noopener" hidden>查看原图</a>
                   </div>
                   <table class="yolo-table" style="margin-top:14px;">
@@ -1132,6 +1132,7 @@
 	      latestDevices: null
 	    };
 	    let keyDisplayRefreshInFlight = false;
+	    let dashboardRefreshInFlight = false;
 
 	    const lidarSectorDisplayState = {
 	      negative_front: { accepted: null, pendingCloser: null },
@@ -1151,11 +1152,16 @@
 	    };
 
 	    const recognitionState = {
-	      photoUrl: '',
+	      liveFrameUrl: '',
 	      metadataUrl: '',
 	      metadata: null,
 	      metadataTrusted: false,
 	      requestId: 0
+	    };
+
+	    const recognitionConfig = {
+	      liveStreamUrl: '/api/rgb_yolo/live.mjpg',
+	      stateRefreshMs: 333
 	    };
 
 	    function setText(id, value) {
@@ -1753,81 +1759,111 @@
 	      if (!yolo) {
 	        recognitionCount.textContent = '0 个目标';
 	        rgbModuleState.textContent = '等待 / 未接入';
-	        photoPath.textContent = '等待识别链上传图片...';
+	        photoPath.textContent = '等待YOLO实时视频流...';
 	        preview.hidden = true;
 	        preview.removeAttribute('src');
 	        empty.hidden = false;
-	        empty.textContent = '暂无识别抓拍';
+	        empty.textContent = '暂无实时视频流';
 	        photoLink.hidden = true;
 	        photoLink.removeAttribute('href');
 	        renderDetections('yolo-table-body-recognition', []);
-	        recognitionState.photoUrl = '';
+	        recognitionState.liveFrameUrl = '';
 	        recognitionState.metadataUrl = '';
 	        recognitionState.metadata = null;
 	        recognitionState.metadataTrusted = false;
 	        return;
 	      }
 
-	      const detectionRows = buildDetectionRows(yolo);
-	      const untrustedHistoryTable = Boolean(yolo.last_photo_url && yolo.history_table_untrusted);
-	      if (untrustedHistoryTable) {
-	        recognitionCount.textContent = '表格停用';
-	        renderDetections(
-	          'yolo-table-body-recognition',
-	          [],
-	          '旧历史图没有原始检测表，当前不显示估算结果');
-	      } else {
-	        const count = detectionRows.length > 0
+	      const detectionRows = yolo.history_photo ? [] : buildDetectionRows(yolo);
+	      const count = yolo.history_photo
+	        ? 0
+	        : (detectionRows.length > 0
 	          ? detectionRows.length
 	          : (Number(
 	              yolo.detections_count ??
 	              (Array.isArray(yolo.detections) ? yolo.detections.length : 0)
-	            ) || 0);
-	        recognitionCount.textContent = `${count} 个目标`;
-	        renderDetections('yolo-table-body-recognition', detectionRows);
-	      }
+	            ) || 0));
+	      recognitionCount.textContent = `${count} 个目标`;
+	      renderDetections(
+	        'yolo-table-body-recognition',
+	        detectionRows,
+	        yolo.history_photo ? '等待实时YOLO推理数据...' : '等待识别结果...');
 
 	      if (yolo.online) {
 	        rgbModuleState.textContent = '正常 / YOLO Online';
 	      } else if (yolo.history_photo) {
-	        rgbModuleState.textContent = '离线 / 历史抓拍';
+	        rgbModuleState.textContent = '离线 / 等待实时流';
 	      } else if (yolo.model_ready) {
 	        rgbModuleState.textContent = '等待 / 相机未就绪';
 	      } else {
 	        rgbModuleState.textContent = '离线';
 	      }
 
-	      const url = yolo.last_photo_url || '';
-	      const path = yolo.last_photo_path || '';
-	      const time = yolo.last_photo_time || '';
-	      photoPath.textContent = path
-	        ? `${yolo.history_photo ? '历史抓拍: ' : ''}${path}${time ? ` @ ${time}` : ''}`
-	        : (yolo.photo_output_dir ? `照片目录: ${yolo.photo_output_dir}` : '等待识别抓拍...');
+	      const liveUrl = yolo.live_frame_url ? recognitionConfig.liveStreamUrl : '';
+	      const liveTime = yolo.live_frame_time || yolo.last_frame_time || '';
+	      const liveFps = finiteNumber(yolo.live_stream_fps);
+	      photoPath.textContent = liveUrl
+	        ? `实时视频流: ${liveTime || '等待下一帧'}${liveFps !== null ? ` · ${liveFps.toFixed(1)}fps` : ''}`
+	        : '等待YOLO实时视频流...';
 
-	      if (url) {
-	        if (recognitionState.photoUrl !== url) {
-	          preview.src = url;
-	          recognitionState.photoUrl = url;
+	      if (liveUrl) {
+	        if (recognitionState.liveFrameUrl !== liveUrl) {
+	          preview.src = liveUrl;
+	          recognitionState.liveFrameUrl = liveUrl;
 	        }
 	        preview.hidden = false;
 	        empty.hidden = true;
-	        photoLink.hidden = false;
-	        photoLink.href = url;
+	        photoLink.hidden = true;
+	        photoLink.removeAttribute('href');
 	      } else {
 	        preview.hidden = true;
 	        preview.removeAttribute('src');
 	        empty.hidden = false;
-	        empty.textContent = yolo.history_photo ? '当前识别链离线，回显最近一张历史抓拍' : '暂无识别抓拍';
+	        empty.textContent = yolo.history_photo ? '当前识别链离线，等待实时视频流恢复' : '暂无实时视频流';
 	        photoLink.hidden = true;
 	        photoLink.removeAttribute('href');
-	        recognitionState.photoUrl = '';
+	        recognitionState.liveFrameUrl = '';
 	        recognitionState.metadataUrl = '';
 	        recognitionState.metadata = null;
 	        recognitionState.metadataTrusted = false;
 	      }
 	    }
 
+	    function refreshRecognitionLiveFrame() {
+	      const preview = document.getElementById('rgb-yolo-photo-preview');
+	      if (!preview || !recognitionState.liveFrameUrl) {
+	        return;
+	      }
+	      if (!preview.getAttribute('src')) {
+	        preview.src = recognitionState.liveFrameUrl;
+	      }
+	    }
+
+	    function initRecognitionLiveStream() {
+	      const preview = document.getElementById('rgb-yolo-photo-preview');
+	      const empty = document.getElementById('rgb-yolo-photo-empty');
+	      if (preview && empty) {
+	        preview.addEventListener('load', () => {
+	          if (recognitionState.liveFrameUrl) {
+	            preview.hidden = false;
+	            empty.hidden = true;
+	          }
+	        });
+	        preview.addEventListener('error', () => {
+	          if (recognitionState.liveFrameUrl) {
+	            preview.hidden = true;
+	            empty.hidden = false;
+	            empty.textContent = '实时视频帧暂未生成，等待下一帧...';
+	          }
+	        });
+	      }
+	    }
+
 	    async function refreshDashboardState() {
+	      if (dashboardRefreshInFlight) {
+	        return;
+	      }
+	      dashboardRefreshInFlight = true;
 	      const requestId = ++recognitionState.requestId;
 	      try {
 	        const response = await fetch('/api/state', { cache: 'no-store' });
@@ -1839,44 +1875,24 @@
 	          throw new Error(data.error || 'state request failed');
 	        }
 	        renderRuntimeState(data.state);
-	        let yolo = parseJsonPayload(data.state.rgb_yolo_payload);
-	        if (yolo && yolo.last_photo_url) {
-	          try {
-	            const result = await fetchRecognitionMetadata(yolo.last_photo_url);
-	            if (result && result.metadata) {
-	              const metadata = result.metadata;
-	              yolo = {
-	                ...yolo,
-	                ...metadata,
-	                online: yolo.online,
-	                camera_open: yolo.camera_open,
-	                model_ready: yolo.model_ready,
-	                source: yolo.source,
-	                error: yolo.error,
-	                history_table_untrusted: !result.trusted
-	              };
-	            } else {
-	              yolo = { ...yolo, history_table_untrusted: true };
-	            }
-	          } catch (_) {
-	            yolo = { ...yolo, history_table_untrusted: true };
-	          }
-	        }
+	        const yolo = parseJsonPayload(data.state.rgb_yolo_payload);
 	        if (requestId !== recognitionState.requestId) {
 	          return;
 	        }
 	        renderRecognitionState(yolo);
 	      } catch (error) {
 	        renderRuntimeState(null);
-	        if (!recognitionState.photoUrl) {
+	        if (!recognitionState.liveFrameUrl) {
 	          renderRecognitionState(null);
 	        }
+	      } finally {
+	        dashboardRefreshInFlight = false;
 	      }
 	    }
 
 	    function initDashboardPolling() {
 	      refreshDashboardState();
-	      window.setInterval(refreshDashboardState, 1000);
+	      window.setInterval(refreshDashboardState, recognitionConfig.stateRefreshMs);
 	    }
 
 	    async function refreshKeyDisplayState() {
@@ -2255,6 +2271,7 @@
 	    initPageSwitch();
 	    initModeToggle();
 	    initLogStream();
+	    initRecognitionLiveStream();
 	    initDashboardPolling();
 	    initKeyDisplayPolling();
 	    initLidarSectorPolling();

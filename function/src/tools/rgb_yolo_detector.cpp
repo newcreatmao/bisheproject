@@ -26,10 +26,12 @@ namespace
 
 namespace fs = std::filesystem;
 
-constexpr double kDefaultCapturePeriodSec = 1.0;
+constexpr double kDefaultCapturePeriodSec = 1.0 / 3.0;
 constexpr double kDefaultPhotoMinIntervalSec = 2.0;
 constexpr std::size_t kMaxSavedPhotos = 10;
+constexpr int kLiveFrameJpegQuality = 72;
 constexpr char kAllfileMountPrefix[] = "/allfile";
+constexpr char kLiveFrameFileName[] = "rgb_yolo_live.jpg";
 
 struct Detection
 {
@@ -529,12 +531,14 @@ public:
     photo_output_dir_ = fs::path(expandUserPath(
       declare_parameter<std::string>("photo_output_dir", "~/use/project/source/allfile/photos")));
     photo_root_dir_ = photo_output_dir_.parent_path();
+    live_output_dir_ = photo_root_dir_ / "live";
+    live_frame_path_ = live_output_dir_ / kLiveFrameFileName;
+    live_frame_url_ = mountedUrlFor(photo_root_dir_, live_frame_path_, kAllfileMountPrefix);
     photo_min_interval_sec_ = std::max(
       0.0,
       declare_parameter<double>("photo_min_interval_sec", kDefaultPhotoMinIntervalSec));
 
-    fs::create_directories(photo_output_dir_);
-    pruneSavedPhotos(photo_output_dir_, fs::path{});
+    fs::create_directories(live_output_dir_);
 
     result_pub_ = create_publisher<std_msgs::msg::String>(result_topic_, 10);
 
@@ -547,11 +551,11 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "rgb_yolo_detector ready: source=%s topic=%s period=%.2fs photo_dir=%s",
+      "rgb_yolo_detector ready: source=%s topic=%s period=%.2fs live_frame=%s",
       camera_source_.c_str(),
       result_topic_.c_str(),
       capture_period_sec_,
-      photo_output_dir_.string().c_str());
+      live_frame_path_.string().c_str());
   }
 
   ~RgbYoloDetector() override
@@ -784,7 +788,6 @@ private:
           bbox_h = best.box.height;
           class_name = classNameForDetection(best, yolo_labels_);
           last_detection_time_ = frame_time;
-          saveDetectionPhoto(frame, detections, class_name, frame_time);
         }
       }
     } catch (const Ort::Exception & ex) {
@@ -795,9 +798,100 @@ private:
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 3000, "%s", last_error_.c_str());
     }
 
+    writeLiveFrame(frame, detections, frame_time);
+
     publishStatus(
       online, true, true, detected, detections_count, class_name, confidence,
       bbox_x, bbox_y, bbox_w, bbox_h, frame_width, frame_height, frame_time, detections);
+  }
+
+  cv::Mat annotatedFrame(const cv::Mat & frame, const std::vector<Detection> & detections) const
+  {
+    cv::Mat annotated = frame.clone();
+    const cv::Scalar accent(35, 115, 230);
+    for (const auto & detection : detections) {
+      cv::rectangle(annotated, detection.box, accent, 2);
+
+      std::string class_name;
+      if (detection.class_id >= 0 && detection.class_id < static_cast<int>(yolo_labels_.size())) {
+        class_name = yolo_labels_[detection.class_id];
+      } else {
+        class_name = "id=" + std::to_string(detection.class_id);
+      }
+
+      std::ostringstream label_text;
+      label_text << class_name << " " << std::fixed << std::setprecision(2) << detection.confidence;
+      int baseline = 0;
+      const cv::Size label_size = cv::getTextSize(
+        label_text.str(),
+        cv::FONT_HERSHEY_SIMPLEX,
+        0.6,
+        2,
+        &baseline);
+      const int label_x = detection.box.x;
+      const int label_y = std::max(detection.box.y - 8, label_size.height + 8);
+      cv::rectangle(
+        annotated,
+        cv::Rect(
+          label_x,
+          label_y - label_size.height - 8,
+          label_size.width + 12,
+          label_size.height + baseline + 10),
+        accent,
+        cv::FILLED);
+      cv::putText(
+        annotated,
+        label_text.str(),
+        cv::Point(label_x + 6, label_y - 4),
+        cv::FONT_HERSHEY_SIMPLEX,
+        0.6,
+        cv::Scalar(255, 255, 255),
+        2,
+        cv::LINE_AA);
+    }
+    return annotated;
+  }
+
+  void writeLiveFrame(
+    const cv::Mat & frame,
+    const std::vector<Detection> & detections,
+    const std::string & frame_time)
+  {
+    if (frame.empty()) {
+      return;
+    }
+
+    try {
+      fs::create_directories(live_output_dir_);
+      const cv::Mat annotated = annotatedFrame(frame, detections);
+      const fs::path tmp_path = live_frame_path_.parent_path() / "rgb_yolo_live.tmp.jpg";
+      const std::vector<int> jpeg_params{cv::IMWRITE_JPEG_QUALITY, kLiveFrameJpegQuality};
+      if (!cv::imwrite(tmp_path.string(), annotated, jpeg_params)) {
+        throw std::runtime_error("cv::imwrite returned false");
+      }
+
+      std::error_code rename_error;
+      fs::rename(tmp_path, live_frame_path_, rename_error);
+      if (rename_error) {
+        std::error_code remove_error;
+        fs::remove(live_frame_path_, remove_error);
+        rename_error.clear();
+        fs::rename(tmp_path, live_frame_path_, rename_error);
+      }
+      if (rename_error) {
+        throw std::runtime_error(rename_error.message());
+      }
+
+      last_live_frame_url_ = live_frame_url_;
+      last_live_frame_time_ = frame_time;
+    } catch (const std::exception & ex) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        3000,
+        "failed to update RGB YOLO live frame: %s",
+        ex.what());
+    }
   }
 
   void saveDetectionPhoto(
@@ -1017,8 +1111,7 @@ private:
            << "count       : " << detections_count << "\n"
            << "last_frame  : " << (frame_time.empty() ? "-" : frame_time) << "\n"
            << "last_detect : " << (last_detection_time_.empty() ? "-" : last_detection_time_) << "\n"
-           << "photo_dir   : " << photo_output_dir_.string() << "\n"
-           << "last_photo  : " << (last_photo_path_.empty() ? "-" : last_photo_path_) << "\n"
+           << "live_frame  : " << (last_live_frame_url_.empty() ? "-" : last_live_frame_url_) << "\n"
            << "error       : " << (last_error_.empty() ? "-" : last_error_) << "\n"
            << "==============================";
 
@@ -1040,6 +1133,9 @@ private:
         << "\"detections\":" << detectionsJson(detections, yolo_labels_) << ","
         << "\"frame_width\":" << frame_width << ","
         << "\"frame_height\":" << frame_height << ","
+        << "\"live_frame_url\":\"" << jsonEscape(last_live_frame_url_) << "\","
+        << "\"live_frame_time\":\"" << jsonEscape(last_live_frame_time_) << "\","
+        << "\"live_stream_fps\":" << doubleJson(capture_period_sec_ > 0.0 ? 1.0 / capture_period_sec_ : 0.0) << ","
         << "\"photo_output_dir\":\"" << jsonEscape(photo_output_dir_.string()) << "\","
         << "\"last_photo_path\":\"" << jsonEscape(last_photo_path_) << "\","
         << "\"last_photo_url\":\"" << jsonEscape(last_photo_url_) << "\","
@@ -1064,6 +1160,9 @@ private:
   std::string result_topic_;
   fs::path photo_output_dir_;
   fs::path photo_root_dir_;
+  fs::path live_output_dir_;
+  fs::path live_frame_path_;
+  std::string live_frame_url_;
   double photo_min_interval_sec_ = kDefaultPhotoMinIntervalSec;
   bool model_ready_ = false;
   int yolo_input_width_ = 640;
@@ -1074,6 +1173,8 @@ private:
   std::string last_photo_url_;
   std::string last_photo_time_;
   std::string last_photo_class_name_;
+  std::string last_live_frame_url_;
+  std::string last_live_frame_time_;
   std::string last_error_;
   std::chrono::steady_clock::time_point last_photo_saved_steady_ {};
 

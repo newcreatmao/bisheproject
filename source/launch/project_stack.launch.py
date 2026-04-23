@@ -119,7 +119,7 @@ def generate_launch_description():
             default_value=os.path.join(package_share, 'config', 'lsn10_serial.yaml'),
         ),
         DeclareLaunchArgument('rgb_yolo_camera_source', default_value='/dev/video0'),
-        DeclareLaunchArgument('rgb_yolo_capture_period_sec', default_value='1.0'),
+        DeclareLaunchArgument('rgb_yolo_capture_period_sec', default_value='0.333'),
         DeclareLaunchArgument(
             'yolo_model_path',
             default_value=os.path.join(package_share, 'pt', 'best.onnx'),

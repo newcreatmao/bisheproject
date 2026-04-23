@@ -26,6 +26,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -36,6 +37,7 @@ namespace fs = std::filesystem;
 constexpr char kLogModule[] = "web";
 constexpr char kAllfileMountPrefix[] = "/allfile";
 constexpr std::chrono::seconds kRgbYoloFreshWindow(5);
+constexpr std::chrono::milliseconds kRgbYoloMjpegFrameInterval(333);
 constexpr std::chrono::seconds kSensorFreshWindow(3);
 constexpr std::chrono::seconds kSensorStartupGrace(10);
 constexpr std::chrono::seconds kStartupInfoWindow(18);
@@ -1195,6 +1197,40 @@ void LogDashboardServer::configureRoutes() {
         res.set_content(
             std::string("{\"ok\":true,\"state\":") + stateJson() + "}",
             "application/json; charset=UTF-8");
+    });
+
+    server_.Get("/api/rgb_yolo/live.mjpg", [this](const httplib::Request&, httplib::Response& res) {
+        const fs::path live_frame_path = fs::path(storage_root_) / "live" / "rgb_yolo_live.jpg";
+        res.set_header("Cache-Control", "no-store, no-cache, must-revalidate");
+        res.set_header("Pragma", "no-cache");
+        res.set_chunked_content_provider(
+            "multipart/x-mixed-replace; boundary=frame",
+            [live_frame_path](size_t, httplib::DataSink& sink) {
+                while (sink.is_writable && sink.is_writable()) {
+                    const std::string frame = readFileText(live_frame_path);
+                    if (!frame.empty()) {
+                        std::ostringstream header;
+                        header << "--frame\r\n"
+                               << "Content-Type: image/jpeg\r\n"
+                               << "Content-Length: " << frame.size() << "\r\n\r\n";
+                        const std::string header_text = header.str();
+                        if (!sink.write(header_text.data(), header_text.size())) {
+                            break;
+                        }
+                        if (!sink.write(frame.data(), frame.size())) {
+                            break;
+                        }
+                        if (!sink.write("\r\n", 2)) {
+                            break;
+                        }
+                    }
+                    std::this_thread::sleep_for(kRgbYoloMjpegFrameInterval);
+                }
+                if (sink.done) {
+                    sink.done();
+                }
+                return true;
+            });
     });
 
     server_.Get("/api/lidar/sectors", [this](const httplib::Request&, httplib::Response& res) {
@@ -3400,20 +3436,11 @@ std::string LogDashboardServer::latestRgbYoloPayloadJson() const {
         !payload.empty() &&
         received_steady != std::chrono::steady_clock::time_point{} &&
         (std::chrono::steady_clock::now() - received_steady) <= kRgbYoloFreshWindow;
-    const std::string fallback = latestSavedRgbYoloPayloadJson();
     if (has_live_payload) {
-        const std::string live_photo_url = extractJsonStringField(payload, "last_photo_url");
-        if (live_photo_url.empty() && !fallback.empty()) {
-            return mergeLivePayloadWithSavedPhoto(payload, fallback);
-        }
         return payload;
     }
 
-    if (!fallback.empty()) {
-        return fallback;
-    }
-
-    return payload;
+    return "";
 }
 
 std::string LogDashboardServer::latestSavedRgbYoloPayloadJson() const {
