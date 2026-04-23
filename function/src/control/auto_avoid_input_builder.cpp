@@ -91,6 +91,98 @@ double meanAdjacentRangeDeltaM(const std::vector<FrontSectorPoint>& cluster) {
     return delta_sum_m / static_cast<double>(cluster.size() - 1);
 }
 
+SectorState clusteredBoundarySector(
+    const std::vector<FrontSectorPoint>& points,
+    int raw_valid_points) {
+    SectorState sector;
+    sector.valid_points = raw_valid_points;
+    if (points.empty()) {
+        return sector;
+    }
+
+    std::vector<FrontSectorPoint> sorted_points = points;
+    std::sort(
+        sorted_points.begin(),
+        sorted_points.end(),
+        [](const FrontSectorPoint& lhs, const FrontSectorPoint& rhs) {
+            return lhs.angle_deg < rhs.angle_deg;
+        });
+
+    FrontClusterCandidate best_cluster;
+    std::vector<FrontSectorPoint> current_cluster;
+    const auto consider_cluster =
+        [&best_cluster](const std::vector<FrontSectorPoint>& cluster) {
+            if (static_cast<int>(cluster.size()) < kAutoAvoidFrontClusterMinPoints) {
+                return;
+            }
+
+            FrontClusterCandidate candidate;
+            candidate.valid = true;
+            candidate.support_points = static_cast<int>(cluster.size());
+
+            std::vector<double> sorted_ranges;
+            sorted_ranges.reserve(cluster.size());
+            double nearest_range_m = std::numeric_limits<double>::infinity();
+            double nearest_angle_deg = 0.0;
+            for (const auto& point : cluster) {
+                sorted_ranges.push_back(point.range);
+                if (point.range < nearest_range_m) {
+                    nearest_range_m = point.range;
+                    nearest_angle_deg = point.angle_deg;
+                }
+            }
+
+            std::sort(sorted_ranges.begin(), sorted_ranges.end());
+            candidate.median_range_m = sorted_ranges[sorted_ranges.size() / 2];
+            candidate.nearest_m = nearest_range_m;
+            double angle_sum_deg = 0.0;
+            int angle_count = 0;
+            for (const auto& point : cluster) {
+                if (point.range <=
+                    nearest_range_m + kAutoAvoidFrontClusterAngleAverageBandMeters) {
+                    angle_sum_deg += point.angle_deg;
+                    ++angle_count;
+                }
+            }
+            if (angle_count > 0) {
+                nearest_angle_deg = angle_sum_deg / static_cast<double>(angle_count);
+            }
+            candidate.nearest_angle_deg = nearest_angle_deg;
+
+            if (!best_cluster.valid ||
+                candidate.median_range_m < best_cluster.median_range_m - 1e-6 ||
+                (std::abs(candidate.median_range_m - best_cluster.median_range_m) < 1e-6 &&
+                    candidate.nearest_m < best_cluster.nearest_m)) {
+                best_cluster = candidate;
+            }
+        };
+
+    for (const auto& point : sorted_points) {
+        if (!current_cluster.empty()) {
+            const auto& previous_point = current_cluster.back();
+            const bool same_cluster =
+                std::abs(point.angle_deg - previous_point.angle_deg) <=
+                    kAutoAvoidFrontClusterMaxGapDeg &&
+                std::abs(point.range - previous_point.range) <=
+                    kAutoAvoidFrontClusterAdjacentRangeDeltaMeters;
+            if (!same_cluster) {
+                consider_cluster(current_cluster);
+                current_cluster.clear();
+            }
+        }
+        current_cluster.push_back(point);
+    }
+    consider_cluster(current_cluster);
+
+    if (best_cluster.valid) {
+        sector.valid = true;
+        sector.nearest_m = best_cluster.nearest_m;
+        sector.nearest_angle_deg = best_cluster.nearest_angle_deg;
+        sector.support_points = best_cluster.support_points;
+    }
+    return sector;
+}
+
 bool isWallLikeFrontCluster(
     const FrontClusterCandidate& candidate,
     const SectorState& negative_front,
@@ -185,8 +277,12 @@ AutoAvoidInputBuilder::LidarInputFrame AutoAvoidInputBuilder::buildLidarInputFra
         return frame;
     }
 
+    std::vector<FrontSectorPoint> negative_front_points;
     std::vector<FrontSectorPoint> front_sector_points;
+    std::vector<FrontSectorPoint> positive_front_points;
+    negative_front_points.reserve(msg->ranges.size() / 4);
     front_sector_points.reserve(msg->ranges.size());
+    positive_front_points.reserve(msg->ranges.size() / 4);
     double nearest = std::numeric_limits<double>::infinity();
 
     for (std::size_t i = 0; i < msg->ranges.size(); ++i) {
@@ -217,6 +313,7 @@ AutoAvoidInputBuilder::LidarInputFrame AutoAvoidInputBuilder::buildLidarInputFra
 
         if (normalized_angle_deg >= kAvoidanceNegativeSectorMinDeg &&
             normalized_angle_deg <= kAvoidanceNegativeSectorMaxDeg) {
+            negative_front_points.push_back({range, normalized_angle_deg});
             updateSector(frame.negative_front_sector, range, normalized_angle_deg);
         } else if (
             normalized_angle_deg >= kAvoidanceFrontSectorMinDeg &&
@@ -229,6 +326,7 @@ AutoAvoidInputBuilder::LidarInputFrame AutoAvoidInputBuilder::buildLidarInputFra
         } else if (
             normalized_angle_deg >= kAvoidancePositiveSectorMinDeg &&
             normalized_angle_deg <= kAvoidancePositiveSectorMaxDeg) {
+            positive_front_points.push_back({range, normalized_angle_deg});
             updateSector(frame.positive_front_sector, range, normalized_angle_deg);
         } else if (
             (normalized_angle_deg > kAvoidanceNegativeSectorMaxDeg &&
@@ -245,6 +343,15 @@ AutoAvoidInputBuilder::LidarInputFrame AutoAvoidInputBuilder::buildLidarInputFra
     if (frame.valid) {
         frame.nearest_m = nearest;
     }
+
+    // Side boundary sectors use the same adjacent-point cluster gate as the
+    // front sector, so isolated edge noise stays observable but not actionable.
+    frame.negative_front_sector = clusteredBoundarySector(
+        negative_front_points,
+        frame.negative_front_sector.valid_points);
+    frame.positive_front_sector = clusteredBoundarySector(
+        positive_front_points,
+        frame.positive_front_sector.valid_points);
 
     frame.auto_avoid_front_sector.valid_points = frame.front_sector.valid_points;
     if (!front_sector_points.empty()) {

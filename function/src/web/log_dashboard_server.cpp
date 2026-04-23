@@ -1204,9 +1204,11 @@ void LogDashboardServer::configureRoutes() {
         const auto now_steady = std::chrono::steady_clock::now();
 
         LidarRuntimeState lidar_state;
+        ImuRuntimeState imu_state;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             lidar_state = lidar_state_;
+            imu_state = imu_state_;
         }
 
         const bool lidar_key_valid =
@@ -1215,10 +1217,21 @@ void LogDashboardServer::configureRoutes() {
             lidar_state.valid_points > 0 &&
             lidar_state.message_count > 0 &&
             (now_steady - lidar_state.last_message_steady_) <= kSensorFreshWindow;
+        const bool imu_key_valid =
+            stack_process.running &&
+            imu_state.has_attitude &&
+            imu_state.message_count > 0 &&
+            (now_steady - imu_state.last_message_steady_) <= kSensorFreshWindow;
 
         std::ostringstream out;
         out << "{"
             << "\"ok\":true,"
+            << "\"imu\":{"
+            << "\"valid\":" << boolJson(imu_key_valid) << ","
+            << "\"roll_deg\":" << (imu_key_valid ? numberJson(imu_state.roll_deg, 1) : "null") << ","
+            << "\"pitch_deg\":" << (imu_key_valid ? numberJson(imu_state.pitch_deg, 1) : "null") << ","
+            << "\"yaw_deg\":" << (imu_key_valid ? numberJson(imu_state.yaw_deg, 1) : "null")
+            << "},"
             << "\"lidar\":{"
             << "\"valid\":" << boolJson(lidar_key_valid) << ","
             << "\"front_nearest_zone\":\"" << jsonEscape(lidar_key_valid ? lidar_state.front_nearest_zone : std::string()) << "\","

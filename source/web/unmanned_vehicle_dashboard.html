@@ -960,6 +960,11 @@
                             <button class="btn-success" type="button" id="avoidance-task-start-btn">开始任务</button>
                             <button class="btn-danger" type="button" id="avoidance-task-stop-btn">停止任务</button>
                           </div>
+                          <div class="row" aria-label="避障工作区IMU姿态">
+                            <span class="label">避障区 IMU</span>
+                            <strong id="avoidance-imu-text">--</strong>
+                            <span class="tiny-chip">R / P / Y</span>
+                          </div>
                           <div class="lidar-sector-grid" aria-label="雷达扇区最近距离">
                             <div class="lidar-sector-card">
                               <div class="sector-label">-90° 到 -62° 最近距离</div>
@@ -1126,6 +1131,7 @@
 	      latestSystem: null,
 	      latestDevices: null
 	    };
+	    let keyDisplayRefreshInFlight = false;
 
 	    const lidarSectorDisplayState = {
 	      negative_front: { accepted: null, pendingCloser: null },
@@ -1266,6 +1272,7 @@
 	      setText('lidar-sector-front-angle', '--');
 	      setText('lidar-sector-positive-angle', '--');
 	      setText('avoidance-nearest-zone', '--');
+	      setText('avoidance-imu-text', '--');
 	      setText('lat-text', '--');
 	      setText('lon-text', '--');
 	      setText('attitude-text', '--');
@@ -1477,6 +1484,17 @@
 	      setText(
 	        'avoidance-nearest-zone',
 	        frontZone || (lidar && lidar.front_nearest_zone ? lidar.front_nearest_zone : '--'));
+	    }
+
+	    function renderAvoidanceImu(imu) {
+	      const roll = finiteNumber(imu && imu.roll_deg);
+	      const pitch = finiteNumber(imu && imu.pitch_deg);
+	      const yaw = finiteNumber(imu && imu.yaw_deg);
+	      setText(
+	        'avoidance-imu-text',
+	        imu && imu.valid && roll !== null && pitch !== null && yaw !== null
+	          ? `R ${roll.toFixed(1)}° / P ${pitch.toFixed(1)}° / Y ${yaw.toFixed(1)}°`
+	          : '--');
 	    }
 
 	    function renderRuntimeState(state) {
@@ -1861,6 +1879,33 @@
 	      window.setInterval(refreshDashboardState, 1000);
 	    }
 
+	    async function refreshKeyDisplayState() {
+	      if (keyDisplayRefreshInFlight) {
+	        return;
+	      }
+	      keyDisplayRefreshInFlight = true;
+	      try {
+	        const response = await fetch('/api/state', { cache: 'no-store' });
+	        if (!response.ok) {
+	          throw new Error(`HTTP ${response.status}`);
+	        }
+	        const data = await response.json();
+	        if (!data.ok || !data.state) {
+	          throw new Error(data.error || 'state request failed');
+	        }
+	        renderKeyDisplay(data.state.key_display || null);
+	      } catch (_) {
+	        renderKeyDisplay(null);
+	      } finally {
+	        keyDisplayRefreshInFlight = false;
+	      }
+	    }
+
+	    function initKeyDisplayPolling() {
+	      refreshKeyDisplayState();
+	      window.setInterval(refreshKeyDisplayState, 100);
+	    }
+
 	    async function refreshLidarSectors() {
 	      try {
 	        const response = await fetch('/api/lidar/sectors', { cache: 'no-store' });
@@ -1871,15 +1916,17 @@
 	        if (!data.ok || !data.lidar) {
 	          throw new Error(data.error || 'lidar sectors request failed');
 	        }
+	        renderAvoidanceImu(data.imu);
 	        renderLidarSectors(data.lidar);
 	      } catch (_) {
+	        renderAvoidanceImu(null);
 	        renderLidarSectors(null);
 	      }
 	    }
 
 	    function initLidarSectorPolling() {
 	      refreshLidarSectors();
-	      window.setInterval(refreshLidarSectors, 200);
+	      window.setInterval(refreshLidarSectors, 100);
 	    }
 
     function switchPage(pageId) {
@@ -2209,6 +2256,7 @@
 	    initModeToggle();
 	    initLogStream();
 	    initDashboardPolling();
+	    initKeyDisplayPolling();
 	    initLidarSectorPolling();
 	    initManualControls();
       initAvoidanceTaskControls();
