@@ -866,7 +866,7 @@
 
       <div class="tip">
         <strong>当前页面整理</strong>
-        设备状态与设备信息继续绑定停止模式；识别显示位于控制接口下方，关键显示位于其右侧。
+        设备状态与设备信息继续绑定停止模式；识别显示位于控制接口右侧，关键显示位于控制接口下方。
       </div>
     </aside>
 
@@ -922,7 +922,7 @@
                     </div>
                     <div>
                       <h3 style="margin:0; font-size:18px;">控制接口</h3>
-                      <p class="muted">模式控制位于左侧，识别显示放在控制接口下方</p>
+                      <p class="muted">模式控制位于左侧，识别显示放在控制接口右侧</p>
                     </div>
                   </div>
 
@@ -1033,27 +1033,6 @@
 
               <div class="card">
                 <div class="card-body">
-                  <div class="panel-title">
-                    <h3>关键显示</h3>
-                    <span>位于控制接口右侧</span>
-                  </div>
-                  <div class="key-list">
-                    <div class="row"><span class="label">纬度</span><strong id="lat-text">--</strong></div>
-                    <div class="row"><span class="label">经度</span><strong id="lon-text">--</strong></div>
-                    <div class="row"><span class="label">姿态角</span><strong id="attitude-text">--</strong></div>
-                    <div class="row"><span class="label">深度相机最近障碍</span><strong id="depth-nearest-obstacle">--</strong></div>
-                    <div class="row"><span class="label">雷达最小距离</span><strong id="lidar-nearest-obstacle">--</strong></div>
-                    <div class="row"><span class="label">避障区最近障碍</span><strong id="nearest-obstacle">--</strong></div>
-                    <div class="row"><span class="label">车辆真实速度</span><strong id="vehicle-speed-text">--</strong></div>
-                    <div class="row"><span class="label">车辆角度值</span><strong id="vehicle-angle-text">--</strong></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="overview-bottom">
-              <div class="card">
-                <div class="card-body">
                   <div class="section-head">
                     <div>
                       <h3>识别显示</h3>
@@ -1079,12 +1058,33 @@
                   </table>
                 </div>
               </div>
+            </div>
+
+            <div class="overview-bottom">
+              <div class="card">
+                <div class="card-body">
+                  <div class="panel-title">
+                    <h3>关键显示</h3>
+                    <span>位于识别显示原位置</span>
+                  </div>
+                  <div class="key-list">
+                    <div class="row"><span class="label">纬度</span><strong id="lat-text">--</strong></div>
+                    <div class="row"><span class="label">经度</span><strong id="lon-text">--</strong></div>
+                    <div class="row"><span class="label">姿态角</span><strong id="attitude-text">--</strong></div>
+                    <div class="row"><span class="label">深度相机最近障碍</span><strong id="depth-nearest-obstacle">--</strong></div>
+                    <div class="row"><span class="label">雷达最小距离</span><strong id="lidar-nearest-obstacle">--</strong></div>
+                    <div class="row"><span class="label">避障区最近障碍</span><strong id="nearest-obstacle">--</strong></div>
+                    <div class="row"><span class="label">车辆真实速度</span><strong id="vehicle-speed-text">--</strong></div>
+                    <div class="row"><span class="label">车辆角度值</span><strong id="vehicle-angle-text">--</strong></div>
+                  </div>
+                </div>
+              </div>
 
               <div class="card">
                 <div class="card-body logs">
                   <div class="panel-title">
                     <h3>系统日志</h3>
-                    <span>位于识别显示右侧</span>
+                    <span>位于关键显示右侧</span>
                   </div>
                   <pre id="log-box">正在连接日志流...</pre>
                 </div>
