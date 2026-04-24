@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PROJECT_ENV_FILE="${PROJECT_ENV_FILE:-$PROJECT_ROOT/env.sh}"
 
 ROS_SETUP="${ROS_SETUP:-/home/mao/ros2_humble/install/setup.bash}"
 ORBBEC_SETUP="${ORBBEC_SETUP:-/home/mao/sou/orbbec_ws/install/setup.bash}"
@@ -29,13 +30,20 @@ IMU_BAUD="${IMU_BAUD:-460800}"
 IMU_RATE_HZ="${IMU_RATE_HZ:-50}"
 LIDAR_PARAMS_FILE="${LIDAR_PARAMS_FILE:-$PROJECT_ROOT/source/config/lsn10_serial.yaml}"
 RGB_YOLO_CAMERA_SOURCE="${RGB_YOLO_CAMERA_SOURCE:-/dev/video0}"
-RGB_YOLO_CAPTURE_PERIOD_SEC="${RGB_YOLO_CAPTURE_PERIOD_SEC:-0.333}"
+RGB_YOLO_CAPTURE_PERIOD_SEC="${RGB_YOLO_CAPTURE_PERIOD_SEC:-1.0}"
 YOLO_MODEL_PATH="${YOLO_MODEL_PATH:-$PROJECT_ROOT/source/pt/best.onnx}"
 YOLO_CLASSES_PATH="${YOLO_CLASSES_PATH:-$PROJECT_ROOT/source/pt/classes.txt}"
 YOLO_CONF_THRESHOLD="${YOLO_CONF_THRESHOLD:-0.35}"
 PHOTO_OUTPUT_DIR="${PHOTO_OUTPUT_DIR:-$PROJECT_ROOT/source/allfile/photos}"
 
 SCRIPT_NAME="$(basename "$0")"
+
+source_project_env() {
+    if [[ -f "$PROJECT_ENV_FILE" ]]; then
+        # shellcheck source=/dev/null
+        source "$PROJECT_ENV_FILE"
+    fi
+}
 
 usage() {
     cat <<EOF
@@ -53,7 +61,7 @@ usage() {
   IMU_RATE_HZ                   IMU 配置频率，默认 50
   LIDAR_PARAMS_FILE             雷达参数文件，默认 source/config/lsn10_serial.yaml
   RGB_YOLO_CAMERA_SOURCE        RGB+YOLO 视频源，默认 /dev/video0
-  RGB_YOLO_CAPTURE_PERIOD_SEC   RGB+YOLO 采样周期，默认 0.333（约 3fps）
+  RGB_YOLO_CAPTURE_PERIOD_SEC   RGB+YOLO 采样周期，默认 1.0（每秒 1 次）
   YOLO_MODEL_PATH               YOLO 模型路径，默认 source/pt/best.onnx
   YOLO_CLASSES_PATH             YOLO 类别文件路径，默认 source/pt/classes.txt
   YOLO_CONF_THRESHOLD           YOLO 置信度阈值，默认 0.35
@@ -249,6 +257,7 @@ exec \"$PROJECT_ROOT/bin/project\"
 }
 
 start_all() {
+    source_project_env
     ensure_env
     ensure_dirs
     start_stack

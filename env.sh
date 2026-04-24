@@ -26,6 +26,13 @@ if [ -f ~/use/project/install/setup.bash ]; then
   source ~/use/project/install/setup.bash
 fi
 
+# AUTO 工作区天地图浏览器端 tk；来源于 G60 手册 3.4 节。
+export TIANDITU_MAP_TK="9195f2cc54562024351c880e2adcaecb"
+
+# AUTO 工作区道路路线规划默认走道路路由服务；如有自建实例可直接覆盖。
+export AUTO_WORKSPACE_ROUTE_PROVIDER="${AUTO_WORKSPACE_ROUTE_PROVIDER:-osrm}"
+export AUTO_WORKSPACE_OSRM_BASE_URL="${AUTO_WORKSPACE_OSRM_BASE_URL:-http://router.project-osrm.org}"
+
 if [ "$_project_restore_nounset" -eq 1 ]; then
   set -u
 fi

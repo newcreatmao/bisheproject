@@ -737,6 +737,203 @@
       font-size: 13px;
     }
 
+    .auto-box {
+      display: grid;
+      gap: 16px;
+    }
+
+    .auto-workspace-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.95fr);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .auto-map-card,
+    .auto-task-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .auto-map-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .auto-map-head h4 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .auto-map-head p {
+      margin-top: 6px;
+      max-width: 540px;
+      line-height: 1.55;
+    }
+
+    .auto-map-shell {
+      position: relative;
+      min-height: 360px;
+      border-radius: 18px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.06);
+      background:
+        radial-gradient(circle at 12% 18%, rgba(77,163,255,.16), transparent 34%),
+        linear-gradient(180deg, rgba(11, 21, 37, 0.98), rgba(7, 13, 24, 0.98));
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.02);
+      cursor: zoom-in;
+      transition: inset 0.22s ease, border-radius 0.22s ease, box-shadow 0.22s ease;
+    }
+
+    .auto-map-shell.expanded {
+      position: fixed;
+      inset: clamp(12px, 2vw, 24px);
+      min-height: auto;
+      z-index: 1200;
+      border-radius: 22px;
+      box-shadow:
+        0 0 0 9999px rgba(3, 8, 20, 0.76),
+        0 24px 80px rgba(0, 0, 0, 0.42);
+      cursor: zoom-out;
+    }
+
+    body.auto-map-expanded {
+      overflow: hidden;
+    }
+
+    .auto-map-canvas,
+    .auto-map-empty {
+      position: absolute;
+      inset: 0;
+    }
+
+    .auto-map-canvas {
+      background: #0a1424;
+    }
+
+    .auto-map-canvas.leaflet-container {
+      background: #eef2f6;
+      font: inherit;
+    }
+
+    .auto-map-canvas .leaflet-control-attribution,
+    .auto-map-canvas .leaflet-control-zoom a {
+      color: #0f172a;
+    }
+
+    .auto-map-empty {
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      text-align: center;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    .auto-map-empty strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--text);
+      font-size: 15px;
+    }
+
+    .auto-map-hud {
+      position: absolute;
+      left: 14px;
+      top: 14px;
+      z-index: 2;
+      min-width: 170px;
+      padding: 11px 12px;
+      border-radius: 14px;
+      background: rgba(5, 10, 20, 0.76);
+      border: 1px solid rgba(255,255,255,.08);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 12px 24px rgba(0, 0, 0, 0.22);
+    }
+
+    .auto-map-hud span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1;
+    }
+
+    .auto-map-hud strong {
+      display: block;
+      margin-top: 8px;
+      font-size: 17px;
+      line-height: 1.25;
+    }
+
+    .auto-summary-grid,
+    .auto-runtime-grid,
+    .auto-field-grid,
+    .auto-planner-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .auto-summary-card,
+    .auto-path-note {
+      padding: 13px 14px;
+      border-radius: 15px;
+      background:
+        radial-gradient(circle at 14% 12%, rgba(77,163,255,.11), transparent 34%),
+        linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+      border: 1px solid rgba(255,255,255,.06);
+    }
+
+    .auto-summary-card .label {
+      display: block;
+    }
+
+    .auto-summary-card strong {
+      display: block;
+      margin-top: 8px;
+      font-size: 16px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+
+    .auto-field {
+      display: grid;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .auto-field input {
+      width: 100%;
+      padding: 12px 13px;
+      border-radius: 13px;
+      border: 1px solid rgba(255,255,255,.08);
+      outline: none;
+      color: var(--text);
+      background: rgba(255,255,255,.04);
+      font: inherit;
+    }
+
+    .auto-field input:focus {
+      border-color: rgba(77,163,255,.38);
+      box-shadow: 0 0 0 1px rgba(77,163,255,.14);
+    }
+
+    .auto-planner-actions button {
+      width: 100%;
+      padding: 12px 14px;
+    }
+
+    .auto-path-note strong {
+      display: block;
+      margin-top: 8px;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
     .lidar-sector-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -833,7 +1030,11 @@
       .control-grid,
       .observation-grid,
       .action-row,
-      .lidar-sector-grid {
+      .lidar-sector-grid,
+      .auto-workspace-grid,
+      .auto-summary-grid,
+      .auto-field-grid,
+      .auto-planner-actions {
         grid-template-columns: 1fr;
       }
     }
@@ -846,6 +1047,7 @@
       .manual-buttons,
       .avoidance-actions { grid-template-columns: 1fr; }
       .main { padding: 14px; }
+      .auto-map-shell { min-height: 300px; }
     }
   </style>
 </head>
@@ -945,7 +1147,104 @@
                     <div class="mode-panel" id="auto-mode-panel">
                       <div class="subcard">
                         <div class="block-title"><h4>自动模式控制</h4><span class="tiny-chip success">AUTO</span></div>
-                        <p class="muted" style="margin:0;">自动工作区预留，当前不绑定任何控制指令。</p>
+                        <div class="auto-box">
+                          <div class="auto-workspace-grid">
+                            <div class="auto-map-card">
+                              <div class="auto-map-head">
+                                <div>
+                                  <h4>自动工作区地图</h4>
+                                  <p class="muted">以 GPS 当前位置为中心展示最近约 100m 范围，并在自动工作区内预览目的地与道路路径。</p>
+                                </div>
+                                <span class="tiny-chip" id="auto-map-provider-chip">地图</span>
+                              </div>
+                              <div class="auto-map-shell" id="auto-map-shell" title="双击放大查看地图">
+                                <div class="auto-map-hud">
+                                  <span>规划状态</span>
+                                  <strong id="auto-plan-state">等待定位</strong>
+                                </div>
+                                <div class="auto-map-canvas" id="auto-map-canvas" hidden></div>
+                                <div class="auto-map-empty" id="auto-map-empty">
+                                  <div>
+                                    <strong>自动工作区地图等待初始化</strong>
+                                    请先切换到自动工作区，并在环境变量里配置 `TIANDITU_MAP_TK` 地图密钥。
+                                  </div>
+                                </div>
+                              </div>
+                              <p class="muted" id="auto-map-caption" style="margin:0;">自动工作区地图会随 GPS 实时更新位置，并回显后端保存的目标点与道路路径预览。</p>
+                            </div>
+
+                            <div class="auto-task-grid">
+                              <div class="auto-summary-grid">
+                                <div class="auto-summary-card">
+                                  <span class="label">GPS 状态</span>
+                                  <strong id="auto-gps-status">等待 GPS</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">当前航向</span>
+                                  <strong id="auto-imu-yaw">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">当前 XY</span>
+                                  <strong id="auto-current-position">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">目标 XY</span>
+                                  <strong id="auto-target-position">未设置</strong>
+                                </div>
+                              </div>
+
+                              <div class="auto-field-grid">
+                                <label class="auto-field">
+                                  终点 X（东向，m）
+                                  <input id="auto-destination-x" type="number" step="0.1" placeholder="例如 18.0" />
+                                </label>
+                                <label class="auto-field">
+                                  终点 Y（北向，m）
+                                  <input id="auto-destination-y" type="number" step="0.1" placeholder="例如 -6.5" />
+                                </label>
+                              </div>
+
+                              <p class="muted" id="auto-origin-text" style="margin:0;">XY 原点等待 GPS 有效定位后锁定。</p>
+
+                              <div class="auto-planner-actions" aria-label="自动工作区路径规划">
+                                <button class="btn-primary" type="button" id="auto-plan-route-btn">规划路径</button>
+                                <button class="btn-ghost" type="button" id="auto-clear-route-btn">清除路径</button>
+                              </div>
+
+                              <div class="auto-path-note">
+                                <span class="label">路径规划预览</span>
+                                <strong id="auto-planner-status">等待设置终点 XY 坐标。</strong>
+                              </div>
+
+                              <div class="auto-runtime-grid">
+                                <div class="auto-summary-card">
+                                  <span class="label">任务阶段</span>
+                                  <strong id="auto-runtime-phase">待命</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">剩余距离</span>
+                                  <strong id="auto-runtime-remaining">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">航向误差</span>
+                                  <strong id="auto-runtime-heading-error">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">控制输出</span>
+                                  <strong id="auto-runtime-command">--</strong>
+                                </div>
+                              </div>
+
+                              <div class="avoidance-actions" aria-label="自动任务控制">
+                                <button class="btn-success" type="button" id="auto-task-start-btn">开始任务</button>
+                                <button class="btn-danger" type="button" id="auto-task-stop-btn">停止任务</button>
+                              </div>
+
+                              <p class="muted" id="auto-task-status" style="margin:0;">当前未发送自动任务指令。</p>
+                              <p class="muted" style="margin:0;">自动任务会沿后端道路路径跟踪目标点，并在前向近障出现时切入避障链后继续推进。</p>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
 
@@ -1036,16 +1335,16 @@
                   <div class="section-head">
                     <div>
                       <h3>识别显示</h3>
-                      <p>RGB实时视频流叠加YOLO框，推理数据实时显示在下方</p>
+                      <p>每秒抓拍 RGB 图做 YOLO 推理，识别到后显示最近一张带框照片</p>
                     </div>
                     <span class="tiny-chip">bbox / class / confidence</span>
                   </div>
                   <div class="photo-preview-shell">
-                    <img id="rgb-yolo-photo-preview" class="photo-preview" alt="RGB YOLO实时视频流" hidden />
-                    <div id="rgb-yolo-photo-empty" class="empty-photo">等待实时视频流...</div>
+                    <img id="rgb-yolo-photo-preview" class="photo-preview" alt="最近识别抓拍" hidden />
+                    <div id="rgb-yolo-photo-empty" class="empty-photo">等待识别抓拍...</div>
                   </div>
                   <div class="photo-meta">
-                    <div class="footer-note" id="rgb-yolo-photo-path">实时视频流等待更新...</div>
+                    <div class="footer-note" id="rgb-yolo-photo-path">等待识别链上传图片...</div>
                     <a id="rgb-yolo-photo-link" class="tiny-chip" href="#" target="_blank" rel="noopener" hidden>查看原图</a>
                   </div>
                   <table class="yolo-table" style="margin-top:14px;">
@@ -1071,9 +1370,6 @@
                     <div class="row"><span class="label">纬度</span><strong id="lat-text">--</strong></div>
                     <div class="row"><span class="label">经度</span><strong id="lon-text">--</strong></div>
                     <div class="row"><span class="label">姿态角</span><strong id="attitude-text">--</strong></div>
-                    <div class="row"><span class="label">深度相机最近障碍</span><strong id="depth-nearest-obstacle">--</strong></div>
-                    <div class="row"><span class="label">雷达最小距离</span><strong id="lidar-nearest-obstacle">--</strong></div>
-                    <div class="row"><span class="label">避障区最近障碍</span><strong id="nearest-obstacle">--</strong></div>
                     <div class="row"><span class="label">车辆真实速度</span><strong id="vehicle-speed-text">--</strong></div>
                     <div class="row"><span class="label">车辆角度值</span><strong id="vehicle-angle-text">--</strong></div>
                   </div>
@@ -1133,6 +1429,7 @@
 	    };
 	    let keyDisplayRefreshInFlight = false;
 	    let dashboardRefreshInFlight = false;
+	    let lidarSectorRefreshInFlight = false;
 
 	    const lidarSectorDisplayState = {
 	      negative_front: { accepted: null, pendingCloser: null },
@@ -1152,7 +1449,7 @@
 	    };
 
 	    const recognitionState = {
-	      liveFrameUrl: '',
+	      photoUrl: '',
 	      metadataUrl: '',
 	      metadata: null,
 	      metadataTrusted: false,
@@ -1160,8 +1457,41 @@
 	    };
 
 	    const recognitionConfig = {
-	      liveStreamUrl: '/api/rgb_yolo/live.mjpg',
-	      stateRefreshMs: 333
+	      stateRefreshMs: 1000
+	    };
+
+	    const autoWorkspaceDisplayConfig = {
+	      xyLowPassAlpha: 0.22,
+	      staticSpeedThresholdCmS: 2,
+	      staticDisplayUpdateThresholdM: 0.35
+	    };
+
+	    const autoWorkspaceState = {
+	      config: null,
+	      configPromise: null,
+	      mapScriptPromise: null,
+	      mapReady: false,
+	      map: null,
+	      mapProvider: null,
+	      mapExpanded: false,
+	      gpsMarker: null,
+	      targetMarker: null,
+	      rangeCircle: null,
+	      pathPolyline: null,
+	      latestGps: null,
+	      latestImu: null,
+	      plannedOrigin: null,
+	      destination: null,
+	      planData: null,
+	      runtime: null,
+	      currentMapPoint: null,
+	      latestVehicle: null,
+	      displayedCurrentXY: null,
+	      filteredCurrentXY: null,
+	      lastCenteredAt: 0,
+	      lastOriginConfigRefreshAt: 0,
+	      resizeSyncTimerIds: [],
+	      taskRequestPending: false
 	    };
 
 	    function setText(id, value) {
@@ -1246,6 +1576,33 @@
 	      });
 	    }
 
+	    function renderAutoTaskButtonState() {
+	      const runtime = autoWorkspaceState.runtime;
+	      const interactionReady =
+	        workspaceState.activeMode === 'AUTO' &&
+	        !workspaceState.switching &&
+	        !autoWorkspaceState.taskRequestPending;
+	      const hasPlan = Boolean(
+	        (runtime && runtime.plan_ready) ||
+	        autoWorkspaceState.planData ||
+	        autoWorkspaceState.destination);
+	      const startEnabled =
+	        interactionReady &&
+	        hasPlan &&
+	        !(runtime && (runtime.task_running || runtime.awaiting_start_ack));
+	      const stopEnabled =
+	        interactionReady &&
+	        Boolean(runtime && (runtime.task_running || runtime.awaiting_start_ack));
+	      const startButton = document.getElementById('auto-task-start-btn');
+	      const stopButton = document.getElementById('auto-task-stop-btn');
+	      if (startButton) {
+	        startButton.disabled = !startEnabled;
+	      }
+	      if (stopButton) {
+	        stopButton.disabled = !stopEnabled;
+	      }
+	    }
+
 	    function initDashboardDefaults() {
 	      workspaceState.activeMode = 'STOP';
 	      workspaceState.switching = false;
@@ -1253,8 +1610,23 @@
 	      workspaceState.modeInitialized = false;
 	      workspaceState.latestSystem = null;
 	      workspaceState.latestDevices = null;
+	      autoWorkspaceState.runtime = null;
+	      autoWorkspaceState.taskRequestPending = false;
 	      renderSystemStatus(false);
 	      setSystemMode('STOP');
+	      setText('auto-task-status', '当前未发送自动任务指令。');
+	      setAutoPlannerStatus('等待设置终点 XY 坐标。');
+	      setAutoMapCaption('自动工作区地图会随 GPS 实时更新位置，并回显后端保存的目标点与道路路径预览。');
+	      setText('auto-gps-status', '等待 GPS');
+	      setText('auto-current-position', '--');
+	      setText('auto-imu-yaw', '--');
+	      setText('auto-target-position', '未设置');
+	      setText('auto-origin-text', 'XY 原点等待 GPS 有效定位后锁定。');
+	      setAutoPlanState('等待定位');
+	      setText('auto-runtime-phase', '待命');
+	      setText('auto-runtime-remaining', '--');
+	      setText('auto-runtime-heading-error', '--');
+	      setText('auto-runtime-command', '--');
 	      setText('chip-serial', '串口通信：未启动');
 	      setText('gps-state', defaultDeviceTexts.gps);
 	      setText('imu-state', defaultDeviceTexts.imu);
@@ -1282,14 +1654,13 @@
 	      setText('lat-text', '--');
 	      setText('lon-text', '--');
 	      setText('attitude-text', '--');
-	      setText('depth-nearest-obstacle', '--');
-	      setText('lidar-nearest-obstacle', '--');
-	      setText('nearest-obstacle', '--');
 	      setText('vehicle-speed-text', '--');
 	      setText('vehicle-angle-text', '--');
 	      setText('recognition-count', '0 个目标');
 	      setText('stop-mode-switch-status', '停止模式下检测各设备状态后才能切换到其他模式。');
 	      renderAvoidanceTaskButtonState();
+	      renderAutoTaskButtonState();
+	      renderAutoPlannerButtonState();
 	    }
 
 	    function finiteNumber(value) {
@@ -1335,7 +1706,8 @@
 	        valid: Boolean(sector.valid),
 	        nearest_m: finiteNumber(sector.nearest_m),
 	        nearest_angle_deg: finiteNumber(sector.nearest_angle_deg),
-	        valid_points: Number(sector.valid_points || 0)
+	        valid_points: Number(sector.valid_points || 0),
+	        support_points: Number(sector.support_points || 0)
 	      } : null;
 	    }
 
@@ -1364,6 +1736,966 @@
 	        if (normalized === 'right' || normalized === '右') return '右';
 	      }
 	      return frontZoneFromAngle(angleDeg);
+	    }
+
+	    function frontTargetRoleLabel(role) {
+	      if (typeof role !== 'string') {
+	        return '';
+	      }
+	      const normalized = role.trim().toLowerCase();
+	      if (normalized === 'discrete_primary') {
+	        return '离散目标';
+	      }
+	      if (normalized === 'wall_constraint') {
+	        return '墙约束';
+	      }
+	      return '';
+	    }
+
+	    function autoXYText(xMeters, yMeters) {
+	      const x = finiteNumber(xMeters);
+	      const y = finiteNumber(yMeters);
+	      if (x === null || y === null) {
+	        return '--';
+	      }
+	      return `X ${x.toFixed(1)} m / Y ${y.toFixed(1)} m`;
+	    }
+
+	    function autoOriginText(frame) {
+	      if (!frame || !frame.origin_valid) {
+	        return 'XY 原点等待 GPS 有效定位后锁定。';
+	      }
+	      const latitude = finiteNumber(frame.origin_latitude);
+	      const longitude = finiteNumber(frame.origin_longitude);
+	      if (latitude === null || longitude === null) {
+	        return 'XY 原点已锁定，但原点坐标暂不可用。';
+	      }
+	      return `XY 原点：纬度 ${latitude.toFixed(7)} / 经度 ${longitude.toFixed(7)}（X 向东，Y 向北）`;
+	    }
+
+	    function autoRuntimePhaseText(runtime) {
+	      const phase = runtime && typeof runtime.phase === 'string'
+	        ? runtime.phase.trim().toLowerCase()
+	        : '';
+	      const phaseMap = {
+	        idle: '待命',
+	        planned: '已规划',
+	        awaiting_start_ack: '等待启动确认',
+	        tracking: '路径跟踪',
+	        avoiding: '避障接管',
+	        waiting_sensor: '等待传感器',
+	        arrived: '已到达',
+	        stopped: '已停止',
+	        plan_missing: '路径缺失'
+	      };
+	      return phaseMap[phase] || (runtime && runtime.message) || '--';
+	    }
+
+	    function autoDistanceText(distanceMeters) {
+	      const distance = finiteNumber(distanceMeters);
+	      return distance === null ? '--' : `${distance.toFixed(1)} m`;
+	    }
+
+	    function autoHeadingErrorText(headingErrorDeg) {
+	      const headingError = finiteNumber(headingErrorDeg);
+	      return headingError === null ? '--' : `${headingError.toFixed(1)}°`;
+	    }
+
+	    function autoCommandText(runtime) {
+	      if (!runtime) {
+	        return '--';
+	      }
+	      const speed = finiteNumber(runtime.command_speed_cm_s);
+	      const steering = finiteNumber(runtime.command_steering_encoder);
+	      const hasCommand =
+	        runtime.task_running ||
+	        runtime.awaiting_start_ack ||
+	        runtime.target_reached ||
+	        (speed !== null && Math.abs(speed) > 0) ||
+	        (steering !== null && Math.abs(steering) > 0);
+	      if (!hasCommand) {
+	        return '--';
+	      }
+	      const speedText = speed === null ? '--' : `${Math.round(speed)} cm/s`;
+	      const steeringText = steering === null ? '--' : `C2 ${Math.round(steering)}`;
+	      const suffix = runtime.avoidance_active ? ' / 避障接管' : '';
+	      return `${speedText} / ${steeringText}${suffix}`;
+	    }
+
+	    function syncAutoDestinationInputs(target) {
+	      if (!target) {
+	        return;
+	      }
+	      const xInput = document.getElementById('auto-destination-x');
+	      const yInput = document.getElementById('auto-destination-y');
+	      if (!xInput || !yInput) {
+	        return;
+	      }
+	      if (document.activeElement === xInput || document.activeElement === yInput) {
+	        return;
+	      }
+	      const x = finiteNumber(target.x_m);
+	      const y = finiteNumber(target.y_m);
+	      if (x === null || y === null) {
+	        return;
+	      }
+	      const formatInputValue = value => Number(value.toFixed(3)).toString();
+	      const nextX = formatInputValue(x);
+	      const nextY = formatInputValue(y);
+	      if (xInput.value !== nextX) {
+	        xInput.value = nextX;
+	      }
+	      if (yInput.value !== nextY) {
+	        yInput.value = nextY;
+	      }
+	    }
+
+	    function rebuildAutoPlanDataFromRuntime(runtime) {
+	      if (!runtime || !runtime.plan_ready || !Array.isArray(runtime.path) || !runtime.path.length) {
+	        return;
+	      }
+	      autoWorkspaceState.planData = {
+	        origin: Number.isFinite(Number(runtime.origin_latitude)) && Number.isFinite(Number(runtime.origin_longitude))
+	          ? {
+	              latitude: Number(runtime.origin_latitude),
+	              longitude: Number(runtime.origin_longitude)
+	            }
+	          : null,
+	        destination: Number.isFinite(Number(runtime.destination_latitude)) && Number.isFinite(Number(runtime.destination_longitude))
+	          ? {
+	              latitude: Number(runtime.destination_latitude),
+	              longitude: Number(runtime.destination_longitude),
+	              x_m: finiteNumber(runtime.destination_x_m),
+	              y_m: finiteNumber(runtime.destination_y_m)
+	            }
+	          : null,
+	        distance_m: finiteNumber(runtime.preview_distance_m),
+	        bearing_deg: finiteNumber(runtime.preview_bearing_deg),
+	        path: runtime.path
+	          .map(point => ({
+	            latitude: finiteNumber(point.latitude),
+	            longitude: finiteNumber(point.longitude),
+	            x_m: finiteNumber(point.x_m),
+	            y_m: finiteNumber(point.y_m)
+	          }))
+	          .filter(point =>
+	            point.latitude !== null &&
+	            point.longitude !== null &&
+	            point.x_m !== null &&
+	            point.y_m !== null)
+	      };
+	      autoWorkspaceState.plannedOrigin = autoWorkspaceState.planData.origin;
+	    }
+
+	    function autoCoordinateFrame() {
+	      return autoWorkspaceState.config && autoWorkspaceState.config.coordinate_frame
+	        ? autoWorkspaceState.config.coordinate_frame
+	        : null;
+	    }
+
+	    function localXYFromGpsPoint(gpsPoint) {
+	      const frame = autoCoordinateFrame();
+	      if (!gpsPoint || !gpsPoint.valid || !frame || !frame.origin_valid) {
+	        return null;
+	      }
+
+	      const originLatitude = finiteNumber(frame.origin_latitude);
+	      const originLongitude = finiteNumber(frame.origin_longitude);
+	      const latitude = finiteNumber(gpsPoint.latitude);
+	      const longitude = finiteNumber(gpsPoint.longitude);
+	      if (originLatitude === null || originLongitude === null || latitude === null || longitude === null) {
+	        return null;
+	      }
+
+	      const rad = Math.PI / 180.0;
+	      const metersPerRad = 6378137.0;
+	      const originLatRad = originLatitude * rad;
+	      const dLat = (latitude - originLatitude) * rad;
+	      const dLon = (longitude - originLongitude) * rad;
+	      return {
+	        x_m: metersPerRad * dLon * Math.cos(originLatRad),
+	        y_m: metersPerRad * dLat
+	      };
+	    }
+
+	    function xyDistanceMeters(a, b) {
+	      if (!a || !b) {
+	        return Number.POSITIVE_INFINITY;
+	      }
+	      const dx = Number(a.x_m) - Number(b.x_m);
+	      const dy = Number(a.y_m) - Number(b.y_m);
+	      return Math.sqrt(dx * dx + dy * dy);
+	    }
+
+	    function blendAutoWorkspaceXY(previous, current) {
+	      if (!previous) {
+	        return { x_m: current.x_m, y_m: current.y_m };
+	      }
+	      const alpha = autoWorkspaceDisplayConfig.xyLowPassAlpha;
+	      return {
+	        x_m: previous.x_m + (current.x_m - previous.x_m) * alpha,
+	        y_m: previous.y_m + (current.y_m - previous.y_m) * alpha
+	      };
+	    }
+
+	    function autoWorkspaceDisplayLooksStatic() {
+	      const vehicle = autoWorkspaceState.latestVehicle;
+	      if (vehicle && vehicle.speed_valid) {
+	        return Math.abs(Number(vehicle.speed) || 0) <= autoWorkspaceDisplayConfig.staticSpeedThresholdCmS;
+	      }
+	      const runtime = autoWorkspaceState.runtime;
+	      return !(runtime && runtime.task_running);
+	    }
+
+	    function stabilizedAutoCurrentXY(rawXY) {
+	      if (!rawXY) {
+	        autoWorkspaceState.filteredCurrentXY = null;
+	        autoWorkspaceState.displayedCurrentXY = null;
+	        return null;
+	      }
+
+	      autoWorkspaceState.filteredCurrentXY =
+	        blendAutoWorkspaceXY(autoWorkspaceState.filteredCurrentXY, rawXY);
+	      const filtered = autoWorkspaceState.filteredCurrentXY;
+	      if (!autoWorkspaceState.displayedCurrentXY) {
+	        autoWorkspaceState.displayedCurrentXY = { x_m: filtered.x_m, y_m: filtered.y_m };
+	        return autoWorkspaceState.displayedCurrentXY;
+	      }
+
+	      if (autoWorkspaceDisplayLooksStatic()) {
+	        if (xyDistanceMeters(filtered, autoWorkspaceState.displayedCurrentXY) >= autoWorkspaceDisplayConfig.staticDisplayUpdateThresholdM) {
+	          autoWorkspaceState.displayedCurrentXY = { x_m: filtered.x_m, y_m: filtered.y_m };
+	        }
+	        return autoWorkspaceState.displayedCurrentXY;
+	      }
+
+	      autoWorkspaceState.displayedCurrentXY = { x_m: filtered.x_m, y_m: filtered.y_m };
+	      return autoWorkspaceState.displayedCurrentXY;
+	    }
+
+	    function currentAutoDestinationInput() {
+	      const xInput = document.getElementById('auto-destination-x');
+	      const yInput = document.getElementById('auto-destination-y');
+	      const x = finiteNumber(xInput && xInput.value);
+	      const y = finiteNumber(yInput && yInput.value);
+	      return x === null || y === null ? null : { x_m: x, y_m: y };
+	    }
+
+	    function setAutoPlanState(text) {
+	      setText('auto-plan-state', text || '等待定位');
+	    }
+
+	    function setAutoPlannerStatus(text) {
+	      setText('auto-planner-status', text || '等待设置终点 XY 坐标。');
+	    }
+
+	    function setAutoMapCaption(text) {
+	      setText('auto-map-caption', text || '自动工作区地图会随 GPS 实时更新位置，并回显后端保存的目标点与道路路径预览。');
+	    }
+
+	    function setAutoMapEmpty(message) {
+	      const canvas = document.getElementById('auto-map-canvas');
+	      const empty = document.getElementById('auto-map-empty');
+	      if (canvas) {
+	        canvas.hidden = true;
+	      }
+	      if (empty) {
+	        empty.hidden = false;
+	        empty.innerHTML = `<div><strong>自动工作区地图等待初始化</strong>${message}</div>`;
+	      }
+	    }
+
+	    function setAutoMapVisible() {
+	      const canvas = document.getElementById('auto-map-canvas');
+	      const empty = document.getElementById('auto-map-empty');
+	      if (canvas) {
+	        canvas.hidden = false;
+	      }
+	      if (empty) {
+	        empty.hidden = true;
+	      }
+	    }
+
+	    function waitForBrowserFrame() {
+	      return new Promise(resolve => window.requestAnimationFrame(() => resolve()));
+	    }
+
+	    function renderAutoPlannerButtonState() {
+	      const runtime = autoWorkspaceState.runtime;
+	      const interactionReady =
+	        workspaceState.activeMode === 'AUTO' &&
+	        !workspaceState.switching &&
+	        !(runtime && (runtime.task_running || runtime.awaiting_start_ack));
+	      const hasPlan = Boolean(
+	        (runtime && runtime.plan_ready) ||
+	        autoWorkspaceState.planData ||
+	        autoWorkspaceState.destination);
+	      const planButton = document.getElementById('auto-plan-route-btn');
+	      const clearButton = document.getElementById('auto-clear-route-btn');
+	      if (planButton) {
+	        planButton.disabled = !interactionReady;
+	      }
+	      if (clearButton) {
+	        clearButton.disabled = !(interactionReady && hasPlan);
+	      }
+	    }
+
+	    function renderAutoWorkspaceSummary() {
+	      const gps = autoWorkspaceState.latestGps;
+	      const imu = autoWorkspaceState.latestImu;
+	      const runtime = autoWorkspaceState.runtime;
+	      const frame = autoCoordinateFrame();
+	      const target =
+	        autoWorkspaceState.destination ||
+	        (runtime && runtime.plan_ready ? {
+	          latitude: finiteNumber(runtime.destination_latitude),
+	          longitude: finiteNumber(runtime.destination_longitude),
+	          x_m: runtime.destination_x_m,
+	          y_m: runtime.destination_y_m
+	        } : currentAutoDestinationInput());
+	      const runtimeCurrentXY =
+	        runtime && runtime.local_frame_valid
+	          ? {
+	              x_m: finiteNumber(runtime.current_x_m),
+	              y_m: finiteNumber(runtime.current_y_m)
+	            }
+	          : null;
+	      const currentXY =
+	        runtimeCurrentXY && runtimeCurrentXY.x_m !== null && runtimeCurrentXY.y_m !== null
+	          ? runtimeCurrentXY
+	          : localXYFromGpsPoint(gps);
+	      const displayedCurrentXY = stabilizedAutoCurrentXY(currentXY);
+	      const remainingDistance =
+	        runtime && runtime.task_running
+	          ? runtime.remaining_distance_m
+	          : (runtime && runtime.plan_ready ? runtime.preview_distance_m : null);
+
+	      let gpsStatusText = '等待 GPS';
+	      if (gps && gps.valid) {
+	        gpsStatusText = frame && frame.origin_valid
+	          ? 'GPS 正常 / XY 原点已锁定'
+	          : 'GPS 正常 / 等待锁定 XY 原点';
+	      }
+	      setText('auto-gps-status', gpsStatusText);
+	      setText(
+	        'auto-current-position',
+	        displayedCurrentXY ? autoXYText(displayedCurrentXY.x_m, displayedCurrentXY.y_m) : (gps && gps.valid ? '等待 XY 原点' : '--'));
+	      setText(
+	        'auto-imu-yaw',
+	        imu && imu.valid && Number.isFinite(imu.yaw_deg) ? `${imu.yaw_deg.toFixed(1)}°` : '--');
+	      setText(
+	        'auto-target-position',
+	        target ? autoXYText(target.x_m, target.y_m) : '未设置');
+	      setText('auto-origin-text', autoOriginText(frame));
+	      setText('auto-runtime-phase', autoRuntimePhaseText(runtime));
+	      setText('auto-runtime-remaining', autoDistanceText(remainingDistance));
+	      setText('auto-runtime-heading-error', autoHeadingErrorText(runtime && runtime.heading_error_deg));
+	      setText('auto-runtime-command', autoCommandText(runtime));
+
+	      if (runtime && runtime.task_running) {
+	        setAutoPlanState('任务运行中');
+	      } else if (runtime && runtime.awaiting_start_ack) {
+	        setAutoPlanState('等待启动');
+	      } else if ((autoWorkspaceState.planData && autoWorkspaceState.destination) || (runtime && runtime.plan_ready)) {
+	        setAutoPlanState('路径已规划');
+	      } else if (gps && gps.valid) {
+	        setAutoPlanState('已定位');
+	      } else {
+	        setAutoPlanState('等待定位');
+	      }
+	    }
+
+	    async function fetchAutoWorkspaceConfig(forceRefresh = false) {
+	      if (!forceRefresh && autoWorkspaceState.configPromise) {
+	        return autoWorkspaceState.configPromise;
+	      }
+	      if (forceRefresh) {
+	        autoWorkspaceState.configPromise = null;
+	      }
+	      autoWorkspaceState.configPromise = (async () => {
+	        const response = await fetch('/api/auto/workspace/config', { cache: 'no-store' });
+	        if (!response.ok) {
+	          throw new Error(`HTTP ${response.status}`);
+	        }
+	        const payload = await response.json();
+	        if (!payload.ok) {
+	          throw new Error(payload.message || 'auto workspace config failed');
+	        }
+	        autoWorkspaceState.config = payload;
+	        updateAutoMapProviderChip();
+	        return payload;
+	      })().catch(error => {
+	        autoWorkspaceState.configPromise = null;
+	        throw error;
+	      });
+	      return autoWorkspaceState.configPromise;
+	    }
+
+	    function currentAutoMapProvider() {
+	      const provider = autoWorkspaceState.config && autoWorkspaceState.config.map && typeof autoWorkspaceState.config.map.provider === 'string'
+	        ? autoWorkspaceState.config.map.provider.trim().toLowerCase()
+	        : 'tianditu';
+	      return provider === 'osm' ? 'osm' : 'tianditu';
+	    }
+
+	    function updateAutoMapProviderChip() {
+	      setText(
+	        'auto-map-provider-chip',
+	        currentAutoMapProvider() === 'osm' ? 'OSM' : '天地图');
+	    }
+
+	    function scheduleAutoMapResize() {
+	      autoWorkspaceState.resizeSyncTimerIds.forEach(timerId => window.clearTimeout(timerId));
+	      autoWorkspaceState.resizeSyncTimerIds = [];
+	      refreshAutoMapSize();
+	      [36, 160, 320].forEach(delay => {
+	        const timerId = window.setTimeout(() => {
+	          refreshAutoMapSize();
+	          autoWorkspaceState.resizeSyncTimerIds =
+	            autoWorkspaceState.resizeSyncTimerIds.filter(id => id !== timerId);
+	        }, delay);
+	        autoWorkspaceState.resizeSyncTimerIds.push(timerId);
+	      });
+	    }
+
+	    function setAutoMapExpanded(expanded) {
+	      const shell = document.getElementById('auto-map-shell');
+	      if (!shell) {
+	        return;
+	      }
+	      const nextExpanded = Boolean(expanded);
+	      if (autoWorkspaceState.mapExpanded === nextExpanded) {
+	        return;
+	      }
+	      autoWorkspaceState.mapExpanded = nextExpanded;
+	      shell.classList.toggle('expanded', nextExpanded);
+	      shell.title = nextExpanded ? '双击恢复地图大小' : '双击放大查看地图';
+	      shell.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
+	      document.body.classList.toggle('auto-map-expanded', nextExpanded);
+	      scheduleAutoMapResize();
+	    }
+
+	    function toggleAutoMapExpanded(forceExpanded = null) {
+	      const nextExpanded = typeof forceExpanded === 'boolean'
+	        ? forceExpanded
+	        : !autoWorkspaceState.mapExpanded;
+	      setAutoMapExpanded(nextExpanded);
+	    }
+
+	    function loadTiandituMapScript(tk) {
+	      if (window.T && window.T.Map) {
+	        return Promise.resolve(window.T);
+	      }
+	      if (autoWorkspaceState.mapScriptPromise) {
+	        return autoWorkspaceState.mapScriptPromise;
+	      }
+	      autoWorkspaceState.mapScriptPromise = new Promise((resolve, reject) => {
+	        const timeoutId = window.setTimeout(() => {
+	          reject(new Error('天地图脚本加载超时'));
+	        }, 12000);
+
+	        const script = document.createElement('script');
+	        script.async = true;
+	        script.defer = true;
+	        script.dataset.tiandituMapScript = 'true';
+	        script.src = `https://api.tianditu.gov.cn/api?v=4.0&tk=${encodeURIComponent(tk)}`;
+	        script.onload = () => {
+	          window.clearTimeout(timeoutId);
+	          if (window.T && window.T.Map) {
+	            resolve(window.T);
+	            return;
+	          }
+	          reject(new Error('天地图脚本已加载，但地图对象不可用'));
+	        };
+	        script.onerror = () => {
+	          window.clearTimeout(timeoutId);
+	          reject(new Error('天地图脚本加载失败'));
+	        };
+	        document.body.appendChild(script);
+	      }).catch(error => {
+	        autoWorkspaceState.mapScriptPromise = null;
+	        throw error;
+	      });
+	      return autoWorkspaceState.mapScriptPromise;
+	    }
+
+	    function loadLeafletMapAssets() {
+	      if (window.L && typeof window.L.map === 'function') {
+	        return Promise.resolve(window.L);
+	      }
+	      if (autoWorkspaceState.mapScriptPromise) {
+	        return autoWorkspaceState.mapScriptPromise;
+	      }
+	      autoWorkspaceState.mapScriptPromise = new Promise((resolve, reject) => {
+	        const timeoutId = window.setTimeout(() => {
+	          reject(new Error('OSM 地图脚本加载超时'));
+	        }, 12000);
+
+	        if (!document.querySelector('link[data-auto-map-leaflet-css="true"]')) {
+	          const link = document.createElement('link');
+	          link.rel = 'stylesheet';
+	          link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+	          link.dataset.autoMapLeafletCss = 'true';
+	          document.head.appendChild(link);
+	        }
+
+	        const script = document.createElement('script');
+	        script.async = true;
+	        script.defer = true;
+	        script.dataset.autoMapLeafletScript = 'true';
+	        script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+	        script.onload = () => {
+	          window.clearTimeout(timeoutId);
+	          if (window.L && typeof window.L.map === 'function') {
+	            resolve(window.L);
+	            return;
+	          }
+	          reject(new Error('OSM 地图脚本已加载，但 Leaflet 不可用'));
+	        };
+	        script.onerror = () => {
+	          window.clearTimeout(timeoutId);
+	          reject(new Error('OSM 地图脚本加载失败'));
+	        };
+	        document.body.appendChild(script);
+	      }).catch(error => {
+	        autoWorkspaceState.mapScriptPromise = null;
+	        throw error;
+	      });
+	      return autoWorkspaceState.mapScriptPromise;
+	    }
+
+	    function getTiandituNamespace() {
+	      return window.T && window.T.Map ? window.T : null;
+	    }
+
+	    function getLeafletNamespace() {
+	      return window.L && typeof window.L.map === 'function' ? window.L : null;
+	    }
+
+	    function resetAutoMapInstance() {
+	      setAutoMapExpanded(false);
+	      if (autoWorkspaceState.map) {
+	        if (autoWorkspaceState.mapProvider === 'osm' && typeof autoWorkspaceState.map.remove === 'function') {
+	          autoWorkspaceState.map.remove();
+	        } else if (typeof autoWorkspaceState.map.clearOverLays === 'function') {
+	          autoWorkspaceState.map.clearOverLays();
+	        } else if (typeof autoWorkspaceState.map.clearOverlays === 'function') {
+	          autoWorkspaceState.map.clearOverlays();
+	        }
+	      }
+	      const canvas = document.getElementById('auto-map-canvas');
+	      if (canvas) {
+	        canvas.innerHTML = '';
+	      }
+	      autoWorkspaceState.map = null;
+	      autoWorkspaceState.mapReady = false;
+	      autoWorkspaceState.mapProvider = null;
+	      autoWorkspaceState.gpsMarker = null;
+	      autoWorkspaceState.targetMarker = null;
+	      autoWorkspaceState.rangeCircle = null;
+	      autoWorkspaceState.pathPolyline = null;
+	      autoWorkspaceState.currentMapPoint = null;
+	      autoWorkspaceState.lastCenteredAt = 0;
+	      autoWorkspaceState.mapScriptPromise = null;
+	    }
+
+	    function createMapPoint(lng, lat) {
+	      const provider = currentAutoMapProvider();
+	      if (provider === 'osm') {
+	        const L = getLeafletNamespace();
+	        return L ? L.latLng(lat, lng) : null;
+	      }
+	      const TMap = getTiandituNamespace();
+	      if (!TMap) {
+	        return null;
+	      }
+	      if (typeof TMap.LngLat === 'function') {
+	        return new TMap.LngLat(lng, lat);
+	      }
+	      if (typeof TMap.Lnglat === 'function') {
+	        return new TMap.Lnglat(lng, lat);
+	      }
+	      return null;
+	    }
+
+	    function addMapOverlay(overlay) {
+	      if (!autoWorkspaceState.map || !overlay) {
+	        return;
+	      }
+	      if (autoWorkspaceState.mapProvider === 'osm') {
+	        if (typeof overlay.addTo === 'function') {
+	          overlay.addTo(autoWorkspaceState.map);
+	        }
+	        return;
+	      }
+	      if (typeof autoWorkspaceState.map.addOverLay === 'function') {
+	        autoWorkspaceState.map.addOverLay(overlay);
+	        return;
+	      }
+	      if (typeof autoWorkspaceState.map.addOverlay === 'function') {
+	        autoWorkspaceState.map.addOverlay(overlay);
+	      }
+	    }
+
+	    function removeMapOverlay(overlay) {
+	      if (!autoWorkspaceState.map || !overlay) {
+	        return;
+	      }
+	      if (autoWorkspaceState.mapProvider === 'osm') {
+	        if (typeof autoWorkspaceState.map.removeLayer === 'function' && typeof autoWorkspaceState.map.hasLayer === 'function' && autoWorkspaceState.map.hasLayer(overlay)) {
+	          autoWorkspaceState.map.removeLayer(overlay);
+	        }
+	        return;
+	      }
+	      if (typeof autoWorkspaceState.map.removeOverLay === 'function') {
+	        autoWorkspaceState.map.removeOverLay(overlay);
+	        return;
+	      }
+	      if (typeof autoWorkspaceState.map.removeOverlay === 'function') {
+	        autoWorkspaceState.map.removeOverlay(overlay);
+	      }
+	    }
+
+	    function setMapViewport(points) {
+	      if (!autoWorkspaceState.map || !Array.isArray(points) || !points.length) {
+	        return;
+	      }
+	      if (autoWorkspaceState.mapProvider === 'osm') {
+	        const L = getLeafletNamespace();
+	        if (L && typeof autoWorkspaceState.map.fitBounds === 'function') {
+	          autoWorkspaceState.map.fitBounds(L.latLngBounds(points), { padding: [24, 24] });
+	        }
+	        return;
+	      }
+	      if (typeof autoWorkspaceState.map.setViewport === 'function') {
+	        autoWorkspaceState.map.setViewport(points);
+	        return;
+	      }
+	      if (typeof autoWorkspaceState.map.centerAndZoom === 'function') {
+	        autoWorkspaceState.map.centerAndZoom(points[Math.floor(points.length / 2)], 18);
+	      }
+	    }
+
+	    function recenterAutoMap(point) {
+	      if (!autoWorkspaceState.map || !point) {
+	        return;
+	      }
+	      if (autoWorkspaceState.mapProvider === 'osm') {
+	        if (typeof autoWorkspaceState.map.panTo === 'function') {
+	          autoWorkspaceState.map.panTo(point);
+	        }
+	        return;
+	      }
+	      if (typeof autoWorkspaceState.map.panTo === 'function') {
+	        autoWorkspaceState.map.panTo(point);
+	        return;
+	      }
+	      if (typeof autoWorkspaceState.map.centerAndZoom === 'function') {
+	        autoWorkspaceState.map.centerAndZoom(point, 18);
+	      }
+	    }
+
+	    function refreshAutoMapSize() {
+	      if (!autoWorkspaceState.map) {
+	        return;
+	      }
+	      if (autoWorkspaceState.mapProvider === 'osm') {
+	        if (typeof autoWorkspaceState.map.invalidateSize === 'function') {
+	          autoWorkspaceState.map.invalidateSize();
+	        }
+	        return;
+	      }
+	      if (typeof autoWorkspaceState.map.checkResize === 'function') {
+	        autoWorkspaceState.map.checkResize();
+	      }
+	    }
+
+	    function syncAutoRoutePreview() {
+	      const provider = currentAutoMapProvider();
+	      const L = provider === 'osm' ? getLeafletNamespace() : null;
+	      const TMap = provider === 'tianditu' ? getTiandituNamespace() : null;
+	      if (!autoWorkspaceState.mapReady || !autoWorkspaceState.planData || !Array.isArray(autoWorkspaceState.planData.path) || !autoWorkspaceState.planData.path.length || !autoWorkspaceState.destination) {
+	        return;
+	      }
+	      if (provider === 'osm' && !L) {
+	        return;
+	      }
+	      if (provider === 'tianditu' && !TMap) {
+	        return;
+	      }
+	      const points = autoWorkspaceState.planData.path
+	        .map(point => {
+	          const latitude = finiteNumber(point.latitude);
+	          const longitude = finiteNumber(point.longitude);
+	          if (latitude === null || longitude === null) {
+	            return null;
+	          }
+	          return createMapPoint(longitude, latitude);
+	        })
+	        .filter(Boolean);
+	      if (!points.length) {
+	        return;
+	      }
+	      if (autoWorkspaceState.pathPolyline) {
+	        removeMapOverlay(autoWorkspaceState.pathPolyline);
+	      }
+	      autoWorkspaceState.pathPolyline =
+	        provider === 'osm'
+	          ? L.polyline(points, {
+	              color: '#5bd5ff',
+	              weight: 6,
+	              opacity: 0.78
+	            })
+	          : new TMap.Polyline(points, {
+	              color: '#5bd5ff',
+	              weight: 6,
+	              opacity: 0.78
+	            });
+	      addMapOverlay(autoWorkspaceState.pathPolyline);
+
+	      if (autoWorkspaceState.targetMarker) {
+	        removeMapOverlay(autoWorkspaceState.targetMarker);
+	        autoWorkspaceState.targetMarker = null;
+	      }
+	      const targetPoint = createMapPoint(
+	        autoWorkspaceState.destination.longitude,
+	        autoWorkspaceState.destination.latitude);
+	      if (targetPoint) {
+	        autoWorkspaceState.targetMarker =
+	          provider === 'osm'
+	            ? L.circleMarker(targetPoint, {
+	                radius: 11,
+	                color: '#0b6bcf',
+	                weight: 4,
+	                fillColor: '#ffffff',
+	                fillOpacity: 1
+	              })
+	            : new TMap.Marker(targetPoint);
+	        addMapOverlay(autoWorkspaceState.targetMarker);
+	      }
+	      setMapViewport(points);
+	    }
+
+	    function clearAutoRoutePreview(resetDestinationInputs = false) {
+	      removeMapOverlay(autoWorkspaceState.pathPolyline);
+	      removeMapOverlay(autoWorkspaceState.targetMarker);
+	      autoWorkspaceState.pathPolyline = null;
+	      autoWorkspaceState.targetMarker = null;
+	      autoWorkspaceState.plannedOrigin = null;
+	      autoWorkspaceState.destination = null;
+	      autoWorkspaceState.planData = null;
+	      if (resetDestinationInputs) {
+	        const xInput = document.getElementById('auto-destination-x');
+	        const yInput = document.getElementById('auto-destination-y');
+	        if (xInput) xInput.value = '';
+	        if (yInput) yInput.value = '';
+	      }
+	      setAutoPlannerStatus('已清除自动工作区路径预览。');
+	      setAutoMapCaption('自动工作区地图会保留实时定位，道路路径预览已清除。');
+	      renderAutoWorkspaceSummary();
+	    }
+
+	    function updateAutoMapOverlays() {
+	      const provider = currentAutoMapProvider();
+	      const L = provider === 'osm' ? getLeafletNamespace() : null;
+	      const TMap = provider === 'tianditu' ? getTiandituNamespace() : null;
+	      if (!autoWorkspaceState.mapReady || !autoWorkspaceState.latestGps || !autoWorkspaceState.latestGps.valid) {
+	        return;
+	      }
+	      if (provider === 'osm' && !L) {
+	        return;
+	      }
+	      if (provider === 'tianditu' && !TMap) {
+	        return;
+	      }
+	      const config = autoWorkspaceState.config || {};
+	      const radius = Number(config.map && config.map.radius_m) || 100;
+	      const currentPoint = createMapPoint(
+	        autoWorkspaceState.latestGps.longitude,
+	        autoWorkspaceState.latestGps.latitude);
+	      if (!currentPoint) {
+	        return;
+	      }
+	      autoWorkspaceState.currentMapPoint = currentPoint;
+	      removeMapOverlay(autoWorkspaceState.gpsMarker);
+	      autoWorkspaceState.gpsMarker =
+	        provider === 'osm'
+	          ? L.circleMarker(currentPoint, {
+	              radius: 11,
+	              color: '#0b6bcf',
+	              weight: 4,
+	              fillColor: '#ffffff',
+	              fillOpacity: 1
+	            })
+	          : new TMap.Marker(currentPoint);
+	      addMapOverlay(autoWorkspaceState.gpsMarker);
+	      removeMapOverlay(autoWorkspaceState.rangeCircle);
+	      autoWorkspaceState.rangeCircle =
+	        provider === 'osm'
+	          ? L.circle(currentPoint, {
+	              radius,
+	              color: '#67c2ff',
+	              weight: 2,
+	              opacity: 0.7,
+	              fillColor: '#67c2ff',
+	              fillOpacity: 0.08
+	            })
+	          : new TMap.Circle(currentPoint, radius, {
+	              color: '#67c2ff',
+	              weight: 2,
+	              opacity: 0.7,
+	              fillColor: '#67c2ff',
+	              fillOpacity: 0.08
+	            });
+	      addMapOverlay(autoWorkspaceState.rangeCircle);
+
+	      const now = Date.now();
+	      if (workspaceState.activeMode === 'AUTO' && (autoWorkspaceState.lastCenteredAt === 0 || now - autoWorkspaceState.lastCenteredAt >= 1000)) {
+	        recenterAutoMap(currentPoint);
+	        autoWorkspaceState.lastCenteredAt = now;
+	      }
+
+	      if (autoWorkspaceState.planData && autoWorkspaceState.destination && !autoWorkspaceState.pathPolyline) {
+	        syncAutoRoutePreview();
+	      }
+	    }
+
+	    function updateAutoMapOverlaysSafely() {
+	      try {
+	        updateAutoMapOverlays();
+	      } catch (error) {
+	        setAutoMapCaption(`地图已加载，但覆盖物刷新失败：${error.message}`);
+	      }
+	    }
+
+	    function initAutoWorkspaceMapInstance() {
+	      const provider = currentAutoMapProvider();
+	      const TMap = provider === 'tianditu' ? getTiandituNamespace() : null;
+	      const L = provider === 'osm' ? getLeafletNamespace() : null;
+	      if (autoWorkspaceState.mapReady || (provider === 'tianditu' && !TMap) || (provider === 'osm' && !L)) {
+	        return autoWorkspaceState.mapReady;
+	      }
+	      const canvas = document.getElementById('auto-map-canvas');
+	      if (!canvas) {
+	        throw new Error('地图容器未找到');
+	      }
+
+	      setAutoMapVisible();
+	      const initialPoint = createMapPoint(116.404, 39.915);
+	      if (!initialPoint) {
+	        throw new Error(provider === 'osm' ? 'OSM 地图坐标对象初始化失败' : '天地图坐标对象初始化失败');
+	      }
+	      let map = null;
+	      if (provider === 'osm') {
+	        const tilesUrl = autoWorkspaceState.config && autoWorkspaceState.config.map && autoWorkspaceState.config.map.tiles_url
+	          ? autoWorkspaceState.config.map.tiles_url
+	          : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+	        map = L.map('auto-map-canvas', {
+	          zoomControl: true,
+	          preferCanvas: true
+	        });
+	        if (map.doubleClickZoom && typeof map.doubleClickZoom.disable === 'function') {
+	          map.doubleClickZoom.disable();
+	        }
+	        L.tileLayer(tilesUrl, {
+	          maxZoom: 19,
+	          attribution: '&copy; OpenStreetMap'
+	        }).addTo(map);
+	        map.setView(initialPoint, 18);
+	      } else {
+	        map = new TMap.Map('auto-map-canvas');
+	        map.centerAndZoom(initialPoint, 18);
+	        if (typeof map.enableScrollWheelZoom === 'function') {
+	          map.enableScrollWheelZoom();
+	        }
+	      }
+	      autoWorkspaceState.map = map;
+	      autoWorkspaceState.mapReady = true;
+	      autoWorkspaceState.mapProvider = provider;
+	      refreshAutoMapSize();
+	      setAutoMapCaption(
+	        provider === 'osm'
+	          ? 'OSM 道路地图已就绪，自动工作区正在使用 GPS / IMU 实时更新位置，并显示同源道路路径。'
+	          : '天地图已就绪，自动工作区正在使用 GPS / IMU 实时更新位置，并显示后端道路路径。');
+	      updateAutoMapOverlaysSafely();
+	      return true;
+	    }
+
+	    async function ensureAutoWorkspaceMapReady() {
+	      try {
+	        const config = await fetchAutoWorkspaceConfig();
+	        const provider = currentAutoMapProvider();
+	        if (autoWorkspaceState.mapReady && autoWorkspaceState.mapProvider !== provider) {
+	          resetAutoMapInstance();
+	        }
+	        if (autoWorkspaceState.mapReady) {
+	          setAutoMapVisible();
+	          refreshAutoMapSize();
+	          updateAutoMapOverlaysSafely();
+	          return true;
+	        }
+	        if (!config.map || !config.map.configured) {
+	          setAutoMapEmpty('自动工作区地图未配置。');
+	          setAutoMapCaption('自动工作区地图配置尚未就绪；路径规划与自动任务仍可继续，地图仅暂不可见。');
+	          return false;
+	        }
+	        if (provider === 'osm') {
+	          await loadLeafletMapAssets();
+	        } else {
+	          if (!config.map.tk) {
+	            setAutoMapEmpty('请在 `env.sh` 或运行环境里配置 `TIANDITU_MAP_TK` 地图密钥后，再刷新页面加载地图。');
+	            setAutoMapCaption('自动工作区天地图密钥尚未配置；路径规划与自动任务仍可继续，地图仅暂不可见。');
+	            return false;
+	          }
+	          await loadTiandituMapScript(config.map.tk);
+	        }
+	        setAutoMapVisible();
+	        await waitForBrowserFrame();
+	        await waitForBrowserFrame();
+	        initAutoWorkspaceMapInstance();
+	        return autoWorkspaceState.mapReady;
+	      } catch (error) {
+	        setAutoMapEmpty(`自动工作区地图初始化失败：${error.message}`);
+	        setAutoMapCaption('当前自动工作区地图未加载成功，其他工作区功能未受影响。');
+	        return false;
+	      }
+	    }
+
+	    function renderAutoWorkspaceTelemetry(gps, imu) {
+	      const gpsValid =
+	        gps && gps.valid &&
+	        Number.isFinite(Number(gps.latitude)) &&
+	        Number.isFinite(Number(gps.longitude));
+	      autoWorkspaceState.latestGps = gpsValid ? {
+	        valid: true,
+	        latitude: Number(gps.latitude),
+	        longitude: Number(gps.longitude),
+	        altitude_m: finiteNumber(gps.altitude_m)
+	      } : { valid: false };
+	      autoWorkspaceState.latestImu = imu && imu.valid ? {
+	        valid: true,
+	        roll_deg: finiteNumber(imu.roll_deg),
+	        pitch_deg: finiteNumber(imu.pitch_deg),
+	        yaw_deg: finiteNumber(imu.yaw_deg)
+	      } : { valid: false };
+	      renderAutoWorkspaceSummary();
+	      if (gpsValid) {
+	        const frame = autoCoordinateFrame();
+	        const now = Date.now();
+	        if ((!frame || !frame.origin_valid) && now - autoWorkspaceState.lastOriginConfigRefreshAt >= 1500) {
+	          autoWorkspaceState.lastOriginConfigRefreshAt = now;
+	          fetchAutoWorkspaceConfig(true)
+	            .then(() => renderAutoWorkspaceSummary())
+	            .catch(() => {});
+	        }
+	      }
+	      if (workspaceState.activeMode === 'AUTO') {
+	        ensureAutoWorkspaceMapReady().then(ready => {
+	          if (ready) {
+	            updateAutoMapOverlaysSafely();
+	          }
+	        });
+	      }
 	    }
 
 	    function stabilizedLidarSector(key, sector) {
@@ -1405,12 +2737,14 @@
 	          pending.nearest_m = candidateDistance;
 	          pending.nearest_angle_deg = candidateAngle;
 	          pending.valid_points = candidate.valid_points;
+	          pending.support_points = candidate.support_points;
 	        } else {
 	          slot.pendingCloser = {
 	            valid: true,
 	            nearest_m: candidateDistance,
 	            nearest_angle_deg: candidateAngle,
 	            valid_points: candidate.valid_points,
+	            support_points: candidate.support_points,
 	            ticks: 1
 	          };
 	        }
@@ -1429,50 +2763,17 @@
 	    function renderKeyDisplay(keyDisplay) {
 	      const gps = keyDisplay && keyDisplay.gps ? keyDisplay.gps : {};
 	      const imu = keyDisplay && keyDisplay.imu ? keyDisplay.imu : {};
-	      const depth = keyDisplay && keyDisplay.depth ? keyDisplay.depth : {};
-	      const lidar = keyDisplay && keyDisplay.lidar ? keyDisplay.lidar : {};
-	      const nearest = keyDisplay && keyDisplay.nearest_obstacle ? keyDisplay.nearest_obstacle : {};
 	      const vehicle = keyDisplay && keyDisplay.vehicle ? keyDisplay.vehicle : {};
+	      autoWorkspaceState.latestVehicle = vehicle;
 
 	      setText('lat-text', gps.valid ? fixedText(gps.latitude, 7) : '--');
 	      setText('lon-text', gps.valid ? fixedText(gps.longitude, 7) : '--');
 	      setText('attitude-text', imu.valid
 	        ? `R ${fixedText(imu.roll_deg, 1, '°')} / P ${fixedText(imu.pitch_deg, 1, '°')} / Y ${fixedText(imu.yaw_deg, 1, '°')}`
 	        : '--');
-	      const depthNearest = finiteNumber(depth.nearest_m);
-	      const depthZone = typeof depth.nearest_zone === 'string' ? depth.nearest_zone : '';
-	      setText('depth-nearest-obstacle', depth.valid && depthNearest !== null
-	        ? `${depthZone ? `${depthZone} ` : ''}${depthNearest.toFixed(2)} m`
-	        : (depth && Number(depth.valid_pixels || 0) === 0 ? '无有效深度' : '--'));
-	      const lidarNearest = finiteNumber(lidar.nearest_m);
-	      const lidarAngle = finiteNumber(lidar.nearest_angle_deg);
-	      setText('lidar-nearest-obstacle', lidar.valid && lidarNearest !== null
-	        ? `${lidarNearest.toFixed(2)} m${lidarAngle === null ? '' : ` / ${lidarAngle.toFixed(1)}°`}`
-	        : '--');
-
-	      const nearestAngle = finiteNumber(nearest.angle_deg);
-	      const nearestDistance = finiteNumber(nearest.distance_m);
-	      const nearestZone = frontZoneLabel(nearest.zone, nearestAngle);
-	      setText('nearest-obstacle', nearest.valid && nearestDistance !== null
-	        ? `${nearest.source || '避障区雷达'} ${nearestZone ? `${nearestZone} ` : ''}${nearestDistance.toFixed(2)} m${nearestAngle === null ? '' : ` / ${nearestAngle.toFixed(1)}°`}`
-	        : '--');
-	      setText('avoidance-state', nearest.valid && nearestDistance !== null
-	        ? nearestDistance.toFixed(2)
-	        : '--');
-	      setText('avoidance-status', nearest.valid && nearestDistance !== null
-	        ? `${nearestZone ? `${nearestZone}区` : '前向区'}${nearestAngle === null ? '' : ` / ${nearestAngle.toFixed(1)}°`}`
-	        : '等待观测');
-	      setText('avoidance-caption', nearest.valid && nearestDistance !== null
-	        ? (nearest.source || '避障区雷达')
-	        : '前向避障区最近障碍');
-	      setText('avoidance-zone-pill', nearest.valid && nearestDistance !== null
-	        ? (nearestZone || '--')
-	        : '--');
-	      setText('avoidance-angle-pill', nearest.valid && nearestDistance !== null && nearestAngle !== null
-	        ? `${nearestAngle.toFixed(1)}°`
-	        : '--');
 	      setText('vehicle-speed-text', vehicle.speed_valid ? `${vehicle.speed} cm/s` : '--');
 	      setText('vehicle-angle-text', vehicle.angle_valid ? vehicleAngleText(vehicle.angle) : '--');
+	      renderAutoWorkspaceTelemetry(gps, imu);
 	    }
 
 	    function renderLidarSectors(lidar) {
@@ -1481,6 +2782,22 @@
 	      const front = stabilizedLidarSector('front', lidarSectors.front);
 	      const positiveFront = stabilizedLidarSector('positive_front', lidarSectors.positive_front);
 	      const frontZone = frontZoneFromAngle(front && front.valid ? front.nearest_angle_deg : null);
+	      const frontDistance = finiteNumber(front && front.nearest_m);
+	      const frontAngle = finiteNumber(front && front.nearest_angle_deg);
+	      const frontSupportPoints = Number(
+	        (front && front.support_points) ||
+	        (lidar && lidar.front_target_selection && lidar.front_target_selection.selected_front_cluster_points) ||
+	        0);
+	      const frontTargetRole = frontTargetRoleLabel(
+	        lidar && lidar.front_target_selection ? lidar.front_target_selection.front_target_role : '');
+	      const displayZone = frontZone || (lidar && lidar.front_nearest_zone ? lidar.front_nearest_zone : '');
+	      const captionParts = ['避障区雷达'];
+	      if (frontTargetRole) {
+	        captionParts.push(frontTargetRole);
+	      }
+	      if (frontSupportPoints > 0) {
+	        captionParts.push(`支持点 ${frontSupportPoints}`);
+	      }
 	      setText('lidar-sector-negative-distance', lidarSectorDistanceText(negativeFront));
 	      setText('lidar-sector-front-distance', lidarSectorDistanceText(front));
 	      setText('lidar-sector-positive-distance', lidarSectorDistanceText(positiveFront));
@@ -1490,6 +2807,21 @@
 	      setText(
 	        'avoidance-nearest-zone',
 	        frontZone || (lidar && lidar.front_nearest_zone ? lidar.front_nearest_zone : '--'));
+	      setText('avoidance-state', front && front.valid && frontDistance !== null
+	        ? frontDistance.toFixed(2)
+	        : '--');
+	      setText('avoidance-status', front && front.valid && frontDistance !== null
+	        ? `${displayZone ? `${displayZone}区` : '前向区'}${frontAngle === null ? '' : ` / ${frontAngle.toFixed(1)}°`}`
+	        : '等待观测');
+	      setText('avoidance-caption', front && front.valid && frontDistance !== null
+	        ? captionParts.join(' / ')
+	        : '前向避障区最近障碍');
+	      setText('avoidance-zone-pill', front && front.valid && frontDistance !== null
+	        ? (displayZone || '--')
+	        : '--');
+	      setText('avoidance-angle-pill', front && front.valid && frontDistance !== null && frontAngle !== null
+	        ? `${frontAngle.toFixed(1)}°`
+	        : '--');
 	    }
 
 	    function renderAvoidanceImu(imu) {
@@ -1506,8 +2838,28 @@
 	    function renderRuntimeState(state) {
 	      const system = state && state.system ? state.system : {};
 	      const devices = state && state.devices ? state.devices : {};
+	      const autoWorkspace = state && state.key_display ? state.key_display.auto_workspace : null;
 	      workspaceState.latestSystem = system;
 	      workspaceState.latestDevices = devices;
+	      autoWorkspaceState.runtime = autoWorkspace || null;
+	      if (autoWorkspace && autoWorkspace.plan_ready) {
+	        autoWorkspaceState.destination = {
+	          latitude: finiteNumber(autoWorkspace.destination_latitude),
+	          longitude: finiteNumber(autoWorkspace.destination_longitude),
+	          x_m: finiteNumber(autoWorkspace.destination_x_m),
+	          y_m: finiteNumber(autoWorkspace.destination_y_m)
+	        };
+	        rebuildAutoPlanDataFromRuntime(autoWorkspace);
+	        syncAutoDestinationInputs(autoWorkspaceState.destination);
+	      } else if (
+	        autoWorkspace &&
+	        !autoWorkspace.plan_ready &&
+	        !autoWorkspace.task_running &&
+	        !autoWorkspace.awaiting_start_ack &&
+	        autoWorkspaceState.planData
+	      ) {
+	        clearAutoRoutePreview(false);
+	      }
 	      renderSystemStatus(Boolean(system.running));
 	      if (!workspaceState.modeInitialized) {
 	        workspaceState.modeInitialized = true;
@@ -1522,6 +2874,34 @@
 	      setText('rgb-module-state', deviceText(devices.rgb_yolo, defaultDeviceTexts.rgb_yolo));
 	      setText('stm32-state', deviceText(devices.stm32, defaultDeviceTexts.stm32));
 	      setText('chip-serial', `串口通信：${deviceText(devices.stm32, defaultDeviceTexts.stm32)}`);
+	      renderAutoTaskButtonState();
+	      renderAutoPlannerButtonState();
+	      if (autoWorkspace) {
+	        const remaining = finiteNumber(autoWorkspace.remaining_distance_m);
+	        const plannerRemaining =
+	          remaining === null ? '' : ` 剩余 ${remaining.toFixed(1)} m。`;
+	        const targetText =
+	          Number.isFinite(Number(autoWorkspace.destination_x_m)) &&
+	          Number.isFinite(Number(autoWorkspace.destination_y_m))
+	            ? `终点 X ${Number(autoWorkspace.destination_x_m).toFixed(1)} m / Y ${Number(autoWorkspace.destination_y_m).toFixed(1)} m。`
+	            : '';
+	        if (autoWorkspace.awaiting_start_ack) {
+	          setText('auto-task-status', '自动任务正在等待 start ACK。');
+	        } else if (autoWorkspace.task_running) {
+	          setText('auto-task-status', `${autoWorkspace.message || '自动任务运行中。'}${plannerRemaining}`);
+	        } else if (autoWorkspace.target_reached) {
+	          setText('auto-task-status', autoWorkspace.message || '已到达目标点，车辆已停止。');
+	        } else if (autoWorkspace.plan_ready) {
+	          setText('auto-task-status', autoWorkspace.message || '自动道路路径已就绪，等待开始任务。');
+	        } else if (autoWorkspace.message) {
+	          setText('auto-task-status', autoWorkspace.message);
+	        }
+	        if (autoWorkspace.plan_ready) {
+	          setAutoPlannerStatus(`后端已保存道路路径。${targetText}${plannerRemaining}`.trim());
+	        } else if (!autoWorkspace.plan_ready && !autoWorkspace.task_running && !autoWorkspaceState.planData) {
+	          setAutoPlannerStatus('等待设置终点 XY 坐标。');
+	        }
+	      }
 	      renderKeyDisplay(state && state.key_display ? state.key_display : null);
 	    }
 
@@ -1599,46 +2979,37 @@
 	      const logBox = document.getElementById('log-box');
 	      if (!logBox) return;
 
-	      if (typeof EventSource === 'undefined') {
-	        logBox.textContent = '当前浏览器不支持 EventSource，无法订阅日志流。';
-	        return;
-	      }
-
-	      logBox.textContent = '正在连接日志流...';
+	      logBox.textContent = '正在连接日志...';
 	      logBox.addEventListener('scroll', () => {
 	        logState.autoFollow =
 	          (logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight) < 24;
 	      });
-	      const source = new EventSource('/api/logs/stream');
 
-	      source.addEventListener('snapshot', event => {
+	      const refreshLogs = async () => {
 	        try {
-	          replaceLogEntries(JSON.parse(event.data));
+	          const after = logState.latestSequence || 0;
+	          const response = await fetch(`/api/logs/recent?after=${after}`, { cache: 'no-store' });
+	          if (!response.ok) {
+	            throw new Error(`HTTP ${response.status}`);
+	          }
+	          const data = await response.json();
+	          if (!data.ok || !Array.isArray(data.entries)) {
+	            throw new Error(data.error || 'logs request failed');
+	          }
+	          if (after > 0) {
+	            appendLogEntries(data.entries);
+	          } else {
+	            replaceLogEntries(data.entries);
+	          }
 	        } catch (error) {
-	          logBox.textContent = `日志快照解析失败: ${error.message}`;
-	        }
-	      });
-
-	      source.addEventListener('entries', event => {
-	        try {
-	          appendLogEntries(JSON.parse(event.data));
-	        } catch (error) {
-	          appendLogEntries([{
-	            sequence: logState.latestSequence + 1,
-	            timestamp: new Date().toLocaleString(),
-	            level: 'ERROR',
-	            module: 'WEB',
-	            message: `日志增量解析失败: ${error.message}`
-	          }]);
-	        }
-	      });
-
-	      source.addEventListener('keepalive', () => {});
-	      source.onerror = () => {
-	        if (!logState.entries.length) {
-	          logBox.textContent = '日志流连接中断，等待自动重连...';
+	          if (!logState.entries.length) {
+	            logBox.textContent = `日志连接失败: ${error.message}`;
+	          }
 	        }
 	      };
+
+	      refreshLogs();
+	      window.setInterval(refreshLogs, 1500);
 	    }
 
 	    function parseJsonPayload(text) {
@@ -1759,103 +3130,77 @@
 	      if (!yolo) {
 	        recognitionCount.textContent = '0 个目标';
 	        rgbModuleState.textContent = '等待 / 未接入';
-	        photoPath.textContent = '等待YOLO实时视频流...';
+	        photoPath.textContent = '等待识别链上传图片...';
 	        preview.hidden = true;
 	        preview.removeAttribute('src');
 	        empty.hidden = false;
-	        empty.textContent = '暂无实时视频流';
+	        empty.textContent = '暂无识别抓拍';
 	        photoLink.hidden = true;
 	        photoLink.removeAttribute('href');
 	        renderDetections('yolo-table-body-recognition', []);
-	        recognitionState.liveFrameUrl = '';
+	        recognitionState.photoUrl = '';
 	        recognitionState.metadataUrl = '';
 	        recognitionState.metadata = null;
 	        recognitionState.metadataTrusted = false;
 	        return;
 	      }
 
-	      const detectionRows = yolo.history_photo ? [] : buildDetectionRows(yolo);
-	      const count = yolo.history_photo
-	        ? 0
-	        : (detectionRows.length > 0
+	      const detectionRows = buildDetectionRows(yolo);
+	      const untrustedHistoryTable = Boolean(yolo.last_photo_url && yolo.history_table_untrusted);
+	      if (untrustedHistoryTable) {
+	        recognitionCount.textContent = '表格停用';
+	        renderDetections(
+	          'yolo-table-body-recognition',
+	          [],
+	          '旧历史图没有原始检测表，当前不显示估算结果');
+	      } else {
+	        const count = detectionRows.length > 0
 	          ? detectionRows.length
 	          : (Number(
 	              yolo.detections_count ??
 	              (Array.isArray(yolo.detections) ? yolo.detections.length : 0)
-	            ) || 0));
-	      recognitionCount.textContent = `${count} 个目标`;
-	      renderDetections(
-	        'yolo-table-body-recognition',
-	        detectionRows,
-	        yolo.history_photo ? '等待实时YOLO推理数据...' : '等待识别结果...');
+	            ) || 0);
+	        recognitionCount.textContent = `${count} 个目标`;
+	        renderDetections('yolo-table-body-recognition', detectionRows);
+	      }
 
 	      if (yolo.online) {
 	        rgbModuleState.textContent = '正常 / YOLO Online';
 	      } else if (yolo.history_photo) {
-	        rgbModuleState.textContent = '离线 / 等待实时流';
+	        rgbModuleState.textContent = '离线 / 历史抓拍';
 	      } else if (yolo.model_ready) {
 	        rgbModuleState.textContent = '等待 / 相机未就绪';
 	      } else {
 	        rgbModuleState.textContent = '离线';
 	      }
 
-	      const liveUrl = yolo.live_frame_url ? recognitionConfig.liveStreamUrl : '';
-	      const liveTime = yolo.live_frame_time || yolo.last_frame_time || '';
-	      const liveFps = finiteNumber(yolo.live_stream_fps);
-	      photoPath.textContent = liveUrl
-	        ? `实时视频流: ${liveTime || '等待下一帧'}${liveFps !== null ? ` · ${liveFps.toFixed(1)}fps` : ''}`
-	        : '等待YOLO实时视频流...';
+	      const url = yolo.last_photo_url || '';
+	      const path = yolo.last_photo_path || '';
+	      const time = yolo.last_photo_time || '';
+	      photoPath.textContent = path
+	        ? `${yolo.history_photo ? '历史抓拍: ' : ''}${path}${time ? ` @ ${time}` : ''}`
+	        : (yolo.photo_output_dir ? `照片目录: ${yolo.photo_output_dir}` : '等待识别抓拍...');
 
-	      if (liveUrl) {
-	        if (recognitionState.liveFrameUrl !== liveUrl) {
-	          preview.src = liveUrl;
-	          recognitionState.liveFrameUrl = liveUrl;
+	      if (url) {
+	        if (recognitionState.photoUrl !== url) {
+	          preview.src = url;
+	          recognitionState.photoUrl = url;
 	        }
 	        preview.hidden = false;
 	        empty.hidden = true;
-	        photoLink.hidden = true;
-	        photoLink.removeAttribute('href');
+	        photoLink.hidden = false;
+	        photoLink.href = url;
 	      } else {
 	        preview.hidden = true;
 	        preview.removeAttribute('src');
 	        empty.hidden = false;
-	        empty.textContent = yolo.history_photo ? '当前识别链离线，等待实时视频流恢复' : '暂无实时视频流';
+	        empty.textContent = yolo.history_photo ? '当前识别链离线，回显最近一张历史抓拍' : '暂无识别抓拍';
 	        photoLink.hidden = true;
 	        photoLink.removeAttribute('href');
-	        recognitionState.liveFrameUrl = '';
+	        recognitionState.photoUrl = '';
 	        recognitionState.metadataUrl = '';
 	        recognitionState.metadata = null;
 	        recognitionState.metadataTrusted = false;
-	      }
-	    }
-
-	    function refreshRecognitionLiveFrame() {
-	      const preview = document.getElementById('rgb-yolo-photo-preview');
-	      if (!preview || !recognitionState.liveFrameUrl) {
-	        return;
-	      }
-	      if (!preview.getAttribute('src')) {
-	        preview.src = recognitionState.liveFrameUrl;
-	      }
-	    }
-
-	    function initRecognitionLiveStream() {
-	      const preview = document.getElementById('rgb-yolo-photo-preview');
-	      const empty = document.getElementById('rgb-yolo-photo-empty');
-	      if (preview && empty) {
-	        preview.addEventListener('load', () => {
-	          if (recognitionState.liveFrameUrl) {
-	            preview.hidden = false;
-	            empty.hidden = true;
-	          }
-	        });
-	        preview.addEventListener('error', () => {
-	          if (recognitionState.liveFrameUrl) {
-	            preview.hidden = true;
-	            empty.hidden = false;
-	            empty.textContent = '实时视频帧暂未生成，等待下一帧...';
-	          }
-	        });
 	      }
 	    }
 
@@ -1875,14 +3220,38 @@
 	          throw new Error(data.error || 'state request failed');
 	        }
 	        renderRuntimeState(data.state);
-	        const yolo = parseJsonPayload(data.state.rgb_yolo_payload);
+	        renderKeyDisplay(data.state.key_display || null);
+	        let yolo = parseJsonPayload(data.state.rgb_yolo_payload);
+	        if (yolo && yolo.last_photo_url) {
+	          try {
+	            const result = await fetchRecognitionMetadata(yolo.last_photo_url);
+	            if (result && result.metadata) {
+	              const metadata = result.metadata;
+	              yolo = {
+	                ...yolo,
+	                ...metadata,
+	                online: yolo.online,
+	                camera_open: yolo.camera_open,
+	                model_ready: yolo.model_ready,
+	                source: yolo.source,
+	                error: yolo.error,
+	                history_table_untrusted: !result.trusted
+	              };
+	            } else {
+	              yolo = { ...yolo, history_table_untrusted: true };
+	            }
+	          } catch (_) {
+	            yolo = { ...yolo, history_table_untrusted: true };
+	          }
+	        }
 	        if (requestId !== recognitionState.requestId) {
 	          return;
 	        }
 	        renderRecognitionState(yolo);
 	      } catch (error) {
 	        renderRuntimeState(null);
-	        if (!recognitionState.liveFrameUrl) {
+	        renderKeyDisplay(null);
+	        if (!recognitionState.photoUrl) {
 	          renderRecognitionState(null);
 	        }
 	      } finally {
@@ -1895,34 +3264,15 @@
 	      window.setInterval(refreshDashboardState, recognitionConfig.stateRefreshMs);
 	    }
 
-	    async function refreshKeyDisplayState() {
-	      if (keyDisplayRefreshInFlight) {
-	        return;
-	      }
-	      keyDisplayRefreshInFlight = true;
-	      try {
-	        const response = await fetch('/api/state', { cache: 'no-store' });
-	        if (!response.ok) {
-	          throw new Error(`HTTP ${response.status}`);
-	        }
-	        const data = await response.json();
-	        if (!data.ok || !data.state) {
-	          throw new Error(data.error || 'state request failed');
-	        }
-	        renderKeyDisplay(data.state.key_display || null);
-	      } catch (_) {
-	        renderKeyDisplay(null);
-	      } finally {
-	        keyDisplayRefreshInFlight = false;
-	      }
-	    }
-
 	    function initKeyDisplayPolling() {
-	      refreshKeyDisplayState();
-	      window.setInterval(refreshKeyDisplayState, 100);
+	      renderKeyDisplay(null);
 	    }
 
 	    async function refreshLidarSectors() {
+	      if (lidarSectorRefreshInFlight) {
+	        return;
+	      }
+	      lidarSectorRefreshInFlight = true;
 	      try {
 	        const response = await fetch('/api/lidar/sectors', { cache: 'no-store' });
 	        if (!response.ok) {
@@ -1937,18 +3287,23 @@
 	      } catch (_) {
 	        renderAvoidanceImu(null);
 	        renderLidarSectors(null);
+	      } finally {
+	        lidarSectorRefreshInFlight = false;
 	      }
 	    }
 
 	    function initLidarSectorPolling() {
 	      refreshLidarSectors();
-	      window.setInterval(refreshLidarSectors, 100);
+	      window.setInterval(refreshLidarSectors, 250);
 	    }
 
-    function switchPage(pageId) {
-      document.querySelectorAll('.page').forEach(page => page.classList.remove('active'));
-      const target = document.getElementById(pageId);
-      if (target) target.classList.add('active');
+	    function switchPage(pageId) {
+	      if (pageId !== 'dashboard-page') {
+	        setAutoMapExpanded(false);
+	      }
+	      document.querySelectorAll('.page').forEach(page => page.classList.remove('active'));
+	      const target = document.getElementById(pageId);
+	      if (target) target.classList.add('active');
 
       document.querySelectorAll('#side-nav button').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.pageTarget === pageId);
@@ -1966,6 +3321,9 @@
 	    function setSystemMode(mode) {
 	      const config = modeLabels[mode] || modeLabels.STOP;
 	      workspaceState.activeMode = mode;
+	      if (mode !== 'AUTO') {
+	        setAutoMapExpanded(false);
+	      }
 	      document.getElementById('mode-text').textContent = config.text;
       document.getElementById('mode-badge').textContent = config.badge;
 
@@ -1984,6 +3342,15 @@
 	      if (target) target.classList.add('active');
 	      renderStopModeSwitchState(workspaceState.latestSystem || {}, workspaceState.latestDevices || {});
 	      renderAvoidanceTaskButtonState();
+	      renderAutoTaskButtonState();
+	      renderAutoPlannerButtonState();
+	      if (mode === 'AUTO') {
+	        ensureAutoWorkspaceMapReady().then(ready => {
+	          if (ready) {
+	            updateAutoMapOverlaysSafely();
+	          }
+	        });
+	      }
 	    }
 
     async function postJson(url, body = null) {
@@ -2035,6 +3402,8 @@
 	          } finally {
 	            workspaceState.switching = false;
 	            renderAvoidanceTaskButtonState();
+	            renderAutoTaskButtonState();
+	            renderAutoPlannerButtonState();
 	          }
 	        });
       });
@@ -2162,6 +3531,177 @@
       });
     }
 
+    function initAutoTaskControls() {
+      const status = document.getElementById('auto-task-status');
+      const commandMap = {
+        start: {
+          button: document.getElementById('auto-task-start-btn'),
+          url: '/api/auto/start',
+          frame: '#C3=1!',
+          pendingText: '正在发送自动任务开始指令'
+        },
+        stop: {
+          button: document.getElementById('auto-task-stop-btn'),
+          url: '/api/auto/stop',
+          frame: '#C3=0!',
+          pendingText: '正在发送自动任务停止指令'
+        }
+      };
+
+      Object.values(commandMap).forEach(command => {
+        if (!command.button) {
+          return;
+        }
+
+        command.button.addEventListener('click', async () => {
+          if (workspaceState.activeMode !== 'AUTO' || workspaceState.switching || autoWorkspaceState.taskRequestPending) {
+            if (status) {
+              status.textContent = workspaceState.switching
+                ? '正在切换到自动工作区，请稍后再操作。'
+                : '请先进入自动工作区，再操作自动任务按钮。';
+            }
+            return;
+          }
+
+          autoWorkspaceState.taskRequestPending = true;
+          renderAutoTaskButtonState();
+          if (status) {
+            status.textContent = `${command.pendingText}：${command.frame}`;
+          }
+	          try {
+	            const result = await postJson(command.url);
+	            if (status) {
+	              status.textContent = `${result.message || '自动任务指令完成'}：${result.frame || command.frame}`;
+	            }
+	            await refreshDashboardState();
+	          } catch (error) {
+	            if (status) {
+	              status.textContent = `自动任务指令发送失败：${error.message}`;
+	            }
+          } finally {
+            autoWorkspaceState.taskRequestPending = false;
+            renderAutoTaskButtonState();
+          }
+        });
+      });
+    }
+
+	    function initAutoWorkspaceControls() {
+	      const xInput = document.getElementById('auto-destination-x');
+	      const yInput = document.getElementById('auto-destination-y');
+	      const planButton = document.getElementById('auto-plan-route-btn');
+	      const clearButton = document.getElementById('auto-clear-route-btn');
+
+	      if (planButton) {
+	        planButton.addEventListener('click', async () => {
+	          if (workspaceState.activeMode !== 'AUTO' || workspaceState.switching) {
+	            setAutoPlannerStatus(
+	              workspaceState.switching
+	                ? '正在切换到自动工作区，请稍后再规划路径。'
+	                : '请先进入自动工作区，再进行路径规划。');
+	            return;
+	          }
+
+	          const xMeters = finiteNumber(xInput && xInput.value);
+	          const yMeters = finiteNumber(yInput && yInput.value);
+	          if (xMeters === null || yMeters === null) {
+	            setAutoPlannerStatus('请先填写有效的终点 XY 坐标。');
+	            return;
+	          }
+
+	          const gps = autoWorkspaceState.latestGps;
+	          if (!gps || !gps.valid) {
+	            setAutoPlannerStatus('当前 GPS 尚未就绪，暂时无法以车辆当前位置生成路径。');
+	            return;
+	          }
+
+	          const config = await fetchAutoWorkspaceConfig(true);
+	          const frame = config && config.coordinate_frame ? config.coordinate_frame : null;
+	          if (!frame || !frame.origin_valid) {
+	            setAutoPlannerStatus('GPS 已有数据，但自动工作区 XY 原点尚未锁定，请稍后重试。');
+	            return;
+	          }
+
+	          setAutoPlannerStatus('自动工作区正在请求后端生成道路路径...');
+	          try {
+	            const result = await postJson('/api/auto/plan_preview', {
+	              x_m: xMeters,
+	              y_m: yMeters
+	            });
+	            autoWorkspaceState.plannedOrigin = result.origin || null;
+	            autoWorkspaceState.destination = result.destination || {
+	              x_m: xMeters,
+	              y_m: yMeters
+	            };
+	            autoWorkspaceState.planData = result;
+	            renderAutoWorkspaceSummary();
+	            const distance = finiteNumber(result.distance_m);
+	            const bearing = finiteNumber(result.bearing_deg);
+	            setAutoPlannerStatus(
+	              `后端道路路径已生成：终点 X ${xMeters.toFixed(1)} m / Y ${yMeters.toFixed(1)} m，路线 ${distance === null ? '--' : `${distance.toFixed(1)} m`}，航向 ${bearing === null ? '--' : `${bearing.toFixed(1)}°`}。`);
+	            setAutoMapCaption('当前显示的是自动工作区后端道路路径；开始任务后会按 GPS / IMU 沿路径跟踪，并在前向近障时切入避障链。');
+
+	            const ready = await ensureAutoWorkspaceMapReady();
+	            if (ready) {
+	              syncAutoRoutePreview();
+	            }
+	            await refreshDashboardState();
+	          } catch (error) {
+	            autoWorkspaceState.planData = null;
+	            setAutoPlannerStatus(`自动工作区路径规划失败：${error.message}`);
+	          }
+	        });
+	      }
+
+	      if (clearButton) {
+	        clearButton.addEventListener('click', async () => {
+	          if (workspaceState.activeMode !== 'AUTO' || workspaceState.switching) {
+	            setAutoPlannerStatus(
+	              workspaceState.switching
+	                ? '正在切换到自动工作区，请稍后再清除路径。'
+	                : '请先进入自动工作区，再清除路径预览。');
+	            return;
+	          }
+	          try {
+	            await postJson('/api/auto/clear_plan', {});
+	            clearAutoRoutePreview(true);
+	            await refreshDashboardState();
+	          } catch (error) {
+	            setAutoPlannerStatus(`自动工作区清除路径失败：${error.message}`);
+	          }
+	        });
+	      }
+	    }
+
+	    function initAutoMapExpandControls() {
+	      const shell = document.getElementById('auto-map-shell');
+	      if (!shell) {
+	        return;
+	      }
+	      shell.addEventListener('dblclick', event => {
+	        const target = event.target instanceof Element ? event.target : null;
+	        if (target && target.closest('.leaflet-control-container')) {
+	          return;
+	        }
+	        event.preventDefault();
+	        event.stopPropagation();
+	        toggleAutoMapExpanded();
+	      }, true);
+
+	      document.addEventListener('keydown', event => {
+	        if (event.key === 'Escape' && autoWorkspaceState.mapExpanded) {
+	          event.preventDefault();
+	          setAutoMapExpanded(false);
+	        }
+	      });
+
+	      window.addEventListener('resize', () => {
+	        if (autoWorkspaceState.mapExpanded) {
+	          scheduleAutoMapResize();
+	        }
+	      });
+	    }
+
     function initSystemRestart() {
       const button = document.getElementById('system-restart-btn');
       if (!button) return;
@@ -2271,11 +3811,13 @@
 	    initPageSwitch();
 	    initModeToggle();
 	    initLogStream();
-	    initRecognitionLiveStream();
 	    initDashboardPolling();
 	    initKeyDisplayPolling();
 	    initLidarSectorPolling();
 	    initManualControls();
+      initAutoTaskControls();
+      initAutoWorkspaceControls();
+      initAutoMapExpandControls();
       initAvoidanceTaskControls();
       initSystemRestart();
       initSystemStart();

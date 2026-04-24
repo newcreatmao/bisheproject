@@ -37,7 +37,6 @@ namespace fs = std::filesystem;
 constexpr char kLogModule[] = "web";
 constexpr char kAllfileMountPrefix[] = "/allfile";
 constexpr std::chrono::seconds kRgbYoloFreshWindow(5);
-constexpr std::chrono::milliseconds kRgbYoloMjpegFrameInterval(333);
 constexpr std::chrono::seconds kSensorFreshWindow(3);
 constexpr std::chrono::seconds kSensorStartupGrace(10);
 constexpr std::chrono::seconds kStartupInfoWindow(18);
@@ -50,22 +49,27 @@ constexpr int kAutoAvoidSteeringResendThreshold = 6;
 constexpr int kAutoAvoidSpeedResendThreshold = 2;
 // 20 Hz auto-avoid loop period while preserving the existing sleep_until pacing model.
 constexpr std::chrono::milliseconds kAutoAvoidControlPeriod(50);
-constexpr double kDepthNoObstacleDistanceMeters = 999.0;
-constexpr double kDepthMinValidMeters = 0.50;
-constexpr double kDepthNoDataFloorEpsilonMeters = 0.005;
-constexpr double kDepthNoDataClusterMaxMeters = 0.25;
-constexpr double kDepthNearestPercentile = 0.50;
-constexpr double kDepthObstacleMaxMeters = 2.0;
-constexpr int kDepthMinObstaclePixels = 80;
-constexpr double kDepthRoiTopRatio = 0.20;
-constexpr double kDepthRoiBottomRatio = 0.60;
-constexpr double kDepthRoiLeftRatio = 0.20;
-constexpr double kDepthRoiRightRatio = 0.80;
-constexpr double kDepthLeftZoneEndRatio = 0.40;
-constexpr double kDepthCenterZoneEndRatio = 0.60;
+constexpr std::chrono::milliseconds kAutoWorkspaceControlPeriod(100);
+constexpr std::size_t kGpsMedianWindowSize = 5;
+constexpr std::size_t kGpsOriginStabilityWindowSize = 15;
+constexpr double kGpsFilterEmaAlpha = 0.28;
+constexpr double kGpsOriginStableRadiusM = 0.90;
+constexpr double kGpsOriginStableHorizontalStdDevM = 4.0;
 constexpr int kStm32StartSpeedRaw = 30;
 constexpr double kStm32ToWebSpeedScale = 0.89;
 constexpr int kStm32StartAngleCommand = 0;
+constexpr int kAutoWorkspaceCruiseSpeedCmS = 30;
+constexpr int kAutoWorkspaceApproachSpeedCmS = 18;
+constexpr double kAutoWorkspaceApproachDistanceM = 4.0;
+constexpr double kAutoWorkspaceArriveDistanceM = 1.8;
+constexpr double kAutoWorkspacePathLookaheadM = 5.0;
+constexpr double kAutoWorkspaceRoutePointSpacingM = 1.2;
+constexpr std::size_t kAutoWorkspaceRouteMaxPoints = 180;
+constexpr double kAutoWorkspaceHeadingDeadbandDeg = 2.0;
+constexpr double kAutoWorkspaceHeadingKp = 1.6;
+constexpr double kAutoWorkspaceMaxSteeringDeg = 28.0;
+constexpr int kAutoWorkspaceEncoderPer10Deg = 40;
+constexpr char kAutoWorkspaceDefaultOsrmBaseUrl[] = "http://router.project-osrm.org";
 constexpr char kStackProcessNeedle[] = "project_stack.launch.py";
 constexpr char kStackLogModule[] = "STACK";
 constexpr char kStm32StatusSnapshotPath[] = "/tmp/project_stm32_status.txt";
@@ -126,6 +130,19 @@ std::string numberJson(double value, int precision = 3) {
     std::ostringstream out;
     out << std::fixed << std::setprecision(precision) << value;
     return out.str();
+}
+
+double medianValue(std::vector<double> values) {
+    if (values.empty()) {
+        return 0.0;
+    }
+
+    std::sort(values.begin(), values.end());
+    const std::size_t middle = values.size() / 2;
+    if ((values.size() % 2) == 1) {
+        return values[middle];
+    }
+    return (values[middle - 1] + values[middle]) * 0.5;
 }
 
 std::string envStringOrDefault(const char* key, const std::string& fallback) {
@@ -537,39 +554,6 @@ std::string deviceStateJson(const std::string& code, const std::string& text) {
     return out.str();
 }
 
-bool readDepth16Meters(
-    const sensor_msgs::msg::Image& image,
-    std::size_t byte_offset,
-    double& depth_m) {
-    if (byte_offset + sizeof(std::uint16_t) > image.data.size()) {
-        return false;
-    }
-
-    std::uint16_t raw = 0;
-    std::memcpy(&raw, image.data.data() + byte_offset, sizeof(raw));
-    if (image.is_bigendian) {
-        raw = static_cast<std::uint16_t>((raw >> 8) | (raw << 8));
-    }
-    if (raw == 0) {
-        return false;
-    }
-
-    depth_m = static_cast<double>(raw) / 1000.0;
-    return true;
-}
-
-const char* depthZoneNameForX(int x, int width) {
-    const int left_end = std::clamp(static_cast<int>(width * kDepthLeftZoneEndRatio), 0, width);
-    const int center_end = std::clamp(static_cast<int>(width * kDepthCenterZoneEndRatio), 0, width);
-    if (x < left_end) {
-        return "左区";
-    }
-    if (x < center_end) {
-        return "中区";
-    }
-    return "右区";
-}
-
 std::optional<int> parseJsonIntField(const std::string& body, const std::string& key) {
     const std::string raw = trimWhitespace(extractJsonRawField(body, key));
     if (raw.empty()) {
@@ -586,6 +570,117 @@ std::optional<int> parseJsonIntField(const std::string& body, const std::string&
     } catch (...) {
         return std::nullopt;
     }
+}
+
+std::optional<double> parseJsonDoubleField(const std::string& body, const std::string& key) {
+    const std::string raw = trimWhitespace(extractJsonRawField(body, key));
+    if (raw.empty()) {
+        return std::nullopt;
+    }
+    try {
+        std::size_t consumed = 0;
+        const double value = std::stod(raw, &consumed);
+        if (consumed != raw.size() || !std::isfinite(value)) {
+            return std::nullopt;
+        }
+        return value;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+double degToRad(double value_deg) {
+    constexpr double kPi = 3.14159265358979323846;
+    return value_deg * kPi / 180.0;
+}
+
+double radToDeg(double value_rad) {
+    constexpr double kPi = 3.14159265358979323846;
+    return value_rad * 180.0 / kPi;
+}
+
+double haversineDistanceMeters(
+    double lat1_deg,
+    double lon1_deg,
+    double lat2_deg,
+    double lon2_deg) {
+    constexpr double kEarthRadiusMeters = 6378137.0;
+    const double lat1 = degToRad(lat1_deg);
+    const double lat2 = degToRad(lat2_deg);
+    const double delta_lat = degToRad(lat2_deg - lat1_deg);
+    const double delta_lon = degToRad(lon2_deg - lon1_deg);
+    const double h =
+        std::sin(delta_lat * 0.5) * std::sin(delta_lat * 0.5) +
+        std::cos(lat1) * std::cos(lat2) *
+            std::sin(delta_lon * 0.5) * std::sin(delta_lon * 0.5);
+    return 2.0 * kEarthRadiusMeters * std::asin(std::min(1.0, std::sqrt(h)));
+}
+
+double initialBearingDeg(
+    double lat1_deg,
+    double lon1_deg,
+    double lat2_deg,
+    double lon2_deg) {
+    const double lat1 = degToRad(lat1_deg);
+    const double lat2 = degToRad(lat2_deg);
+    const double delta_lon = degToRad(lon2_deg - lon1_deg);
+    const double y = std::sin(delta_lon) * std::cos(lat2);
+    const double x =
+        std::cos(lat1) * std::sin(lat2) -
+        std::sin(lat1) * std::cos(lat2) * std::cos(delta_lon);
+    return radToDeg(std::atan2(y, x));
+}
+
+double normalizeHeadingDifferenceDeg(double value_deg) {
+    while (value_deg > 180.0) {
+        value_deg -= 360.0;
+    }
+    while (value_deg < -180.0) {
+        value_deg += 360.0;
+    }
+    return value_deg;
+}
+
+int autoWorkspaceSteeringEncoderForHeadingError(double heading_error_deg) {
+    double effective_error = heading_error_deg;
+    if (std::abs(effective_error) < kAutoWorkspaceHeadingDeadbandDeg) {
+        effective_error = 0.0;
+    }
+    const double steering_deg = std::clamp(
+        effective_error * kAutoWorkspaceHeadingKp,
+        -kAutoWorkspaceMaxSteeringDeg,
+        kAutoWorkspaceMaxSteeringDeg);
+    return static_cast<int>(std::lround(
+        steering_deg * static_cast<double>(kAutoWorkspaceEncoderPer10Deg) / 10.0));
+}
+
+std::pair<double, double> localPlanarOffsetMeters(
+    double origin_lat_deg,
+    double origin_lon_deg,
+    double target_lat_deg,
+    double target_lon_deg) {
+    constexpr double kEarthRadiusMeters = 6378137.0;
+    const double origin_lat_rad = degToRad(origin_lat_deg);
+    const double x_m =
+        kEarthRadiusMeters * degToRad(target_lon_deg - origin_lon_deg) * std::cos(origin_lat_rad);
+    const double y_m =
+        kEarthRadiusMeters * degToRad(target_lat_deg - origin_lat_deg);
+    return {x_m, y_m};
+}
+
+std::pair<double, double> latLonFromLocalPlanarOffsetMeters(
+    double origin_lat_deg,
+    double origin_lon_deg,
+    double x_m,
+    double y_m) {
+    constexpr double kEarthRadiusMeters = 6378137.0;
+    const double origin_lat_rad = degToRad(origin_lat_deg);
+    const double latitude =
+        origin_lat_deg + radToDeg(y_m / kEarthRadiusMeters);
+    const double longitude =
+        origin_lon_deg + radToDeg(
+            x_m / std::max(1e-9, kEarthRadiusMeters * std::cos(origin_lat_rad)));
+    return {latitude, longitude};
 }
 
 std::string stm32DirectResultJson(
@@ -944,6 +1039,286 @@ bool replaceJsonRawField(std::string& json, const std::string& key, const std::s
     return true;
 }
 
+struct RouteCoordinate {
+    double latitude = 0.0;
+    double longitude = 0.0;
+};
+
+struct AutoWorkspaceRoutePlan {
+    bool ok = false;
+    std::string provider;
+    std::string planner = "backend_road_route";
+    std::string message;
+    double distance_m = 0.0;
+    double duration_s = 0.0;
+    std::vector<RouteCoordinate> path;
+};
+
+std::string firstJsonObjectFromArray(const std::string& raw_array) {
+    const auto begin = raw_array.find('{');
+    if (begin == std::string::npos) {
+        return "";
+    }
+
+    int depth = 0;
+    bool in_string = false;
+    bool escaped = false;
+    for (std::size_t index = begin; index < raw_array.size(); ++index) {
+        const char ch = raw_array[index];
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (ch == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (ch == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if (ch == '"') {
+            in_string = true;
+            continue;
+        }
+        if (ch == '{') {
+            ++depth;
+            continue;
+        }
+        if (ch == '}') {
+            --depth;
+            if (depth == 0) {
+                return raw_array.substr(begin, index - begin + 1);
+            }
+        }
+    }
+    return "";
+}
+
+std::vector<RouteCoordinate> parseLonLatCoordinateArray(const std::string& raw_coordinates) {
+    std::vector<double> values;
+    const char* cursor = raw_coordinates.c_str();
+    char* end = nullptr;
+    while (*cursor != '\0') {
+        while (*cursor != '\0' &&
+               !std::isdigit(static_cast<unsigned char>(*cursor)) &&
+               *cursor != '-' &&
+               *cursor != '+') {
+            ++cursor;
+        }
+        if (*cursor == '\0') {
+            break;
+        }
+
+        const double value = std::strtod(cursor, &end);
+        if (end == cursor) {
+            ++cursor;
+            continue;
+        }
+        if (std::isfinite(value)) {
+            values.push_back(value);
+        }
+        cursor = end;
+    }
+
+    std::vector<RouteCoordinate> coordinates;
+    coordinates.reserve(values.size() / 2);
+    for (std::size_t index = 0; index + 1 < values.size(); index += 2) {
+        RouteCoordinate point;
+        point.longitude = values[index];
+        point.latitude = values[index + 1];
+        coordinates.push_back(point);
+    }
+    return coordinates;
+}
+
+std::string normalizeRouteProvider(std::string value) {
+    value = trimWhitespace(value);
+    for (char& ch : value) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    if (value.empty()) {
+        return "auto";
+    }
+    if (value == "auto" || value == "osrm") {
+        return value;
+    }
+    return "auto";
+}
+
+AutoWorkspaceRoutePlan requestOsrmRoute(
+    double origin_latitude,
+    double origin_longitude,
+    double destination_latitude,
+    double destination_longitude) {
+    AutoWorkspaceRoutePlan plan;
+    plan.provider = "osrm";
+
+    const std::string base_url = trimWhitespace(
+        envStringOrDefault("AUTO_WORKSPACE_OSRM_BASE_URL", kAutoWorkspaceDefaultOsrmBaseUrl));
+    httplib::Client client(base_url);
+    client.set_connection_timeout(std::chrono::seconds(4));
+    client.set_read_timeout(std::chrono::seconds(6));
+    client.set_write_timeout(std::chrono::seconds(4));
+    client.set_follow_location(true);
+    client.set_default_headers({
+        {"User-Agent", "project-auto-workspace/1.0"},
+        {"Accept", "application/json"},
+    });
+
+    std::ostringstream path;
+    path << "/route/v1/driving/"
+         << std::fixed << std::setprecision(7)
+         << origin_longitude << "," << origin_latitude << ";"
+         << destination_longitude << "," << destination_latitude
+         << "?overview=full&geometries=geojson&steps=false&alternatives=false&continue_straight=true";
+
+    const auto response = client.Get(path.str().c_str());
+    if (!response) {
+        plan.message = "道路路线服务无响应";
+        return plan;
+    }
+    if (response->status != 200) {
+        plan.message = "道路路线服务返回 HTTP " + std::to_string(response->status);
+        return plan;
+    }
+
+    const std::string code = extractJsonStringField(response->body, "code");
+    if (code != "Ok") {
+        const std::string api_message = extractJsonStringField(response->body, "message");
+        plan.message =
+            api_message.empty() ?
+                ("道路路线服务返回状态 " + (code.empty() ? std::string("unknown") : code)) :
+                api_message;
+        return plan;
+    }
+
+    const std::string routes_raw = extractJsonRawField(response->body, "routes");
+    const std::string route_raw = firstJsonObjectFromArray(routes_raw);
+    if (route_raw.empty()) {
+        plan.message = "道路路线响应里没有可用路线";
+        return plan;
+    }
+
+    const auto route_distance = parseJsonDoubleField(route_raw, "distance");
+    const auto route_duration = parseJsonDoubleField(route_raw, "duration");
+    const std::string geometry_raw = extractJsonRawField(route_raw, "geometry");
+    const std::string coordinates_raw = extractJsonRawField(geometry_raw, "coordinates");
+    const auto coordinates = parseLonLatCoordinateArray(coordinates_raw);
+    if (coordinates.size() < 2) {
+        plan.message = "道路路线几何数据为空";
+        return plan;
+    }
+
+    plan.ok = true;
+    plan.distance_m = route_distance.value_or(0.0);
+    plan.duration_s = route_duration.value_or(0.0);
+    plan.path = coordinates;
+    plan.message = "道路路线规划成功";
+    return plan;
+}
+
+AutoWorkspaceRoutePlan requestAutoWorkspaceRoadRoute(
+    double origin_latitude,
+    double origin_longitude,
+    double destination_latitude,
+    double destination_longitude) {
+    const std::string provider = normalizeRouteProvider(
+        envStringOrDefault("AUTO_WORKSPACE_ROUTE_PROVIDER", "auto"));
+    if (provider == "osrm" || provider == "auto") {
+        auto plan = requestOsrmRoute(
+            origin_latitude,
+            origin_longitude,
+            destination_latitude,
+            destination_longitude);
+        if (plan.ok) {
+            return plan;
+        }
+        if (provider == "osrm") {
+            return plan;
+        }
+    }
+
+    AutoWorkspaceRoutePlan failed;
+    failed.provider = provider == "auto" ? "osrm" : provider;
+    failed.message = "未配置可用的道路路线服务";
+    return failed;
+}
+
+template <typename PointT>
+double planarDistanceMeters(const PointT& lhs, const PointT& rhs) {
+    return std::hypot(lhs.x_m - rhs.x_m, lhs.y_m - rhs.y_m);
+}
+
+template <typename PointT>
+std::size_t nearestPathPointIndex(
+    const std::vector<PointT>& path,
+    double current_x_m,
+    double current_y_m) {
+    if (path.empty()) {
+        return 0;
+    }
+
+    std::size_t best_index = 0;
+    double best_distance_m = std::numeric_limits<double>::infinity();
+    for (std::size_t index = 0; index < path.size(); ++index) {
+        const double distance_m =
+            std::hypot(path[index].x_m - current_x_m, path[index].y_m - current_y_m);
+        if (distance_m < best_distance_m) {
+            best_distance_m = distance_m;
+            best_index = index;
+        }
+    }
+    return best_index;
+}
+
+template <typename PointT>
+std::size_t lookaheadPathPointIndex(
+    const std::vector<PointT>& path,
+    std::size_t nearest_index,
+    double current_x_m,
+    double current_y_m,
+    double lookahead_distance_m) {
+    if (path.empty()) {
+        return 0;
+    }
+
+    nearest_index = std::min(nearest_index, path.size() - 1);
+    double accumulated_distance_m =
+        std::hypot(path[nearest_index].x_m - current_x_m, path[nearest_index].y_m - current_y_m);
+    std::size_t target_index = nearest_index;
+    for (std::size_t index = nearest_index + 1; index < path.size(); ++index) {
+        accumulated_distance_m += planarDistanceMeters(path[index - 1], path[index]);
+        target_index = index;
+        if (accumulated_distance_m >= lookahead_distance_m) {
+            break;
+        }
+    }
+    return target_index;
+}
+
+template <typename PointT>
+double remainingPathDistanceMeters(
+    const std::vector<PointT>& path,
+    std::size_t nearest_index,
+    double current_x_m,
+    double current_y_m) {
+    if (path.empty()) {
+        return 0.0;
+    }
+
+    nearest_index = std::min(nearest_index, path.size() - 1);
+    double remaining_distance_m =
+        std::hypot(path[nearest_index].x_m - current_x_m, path[nearest_index].y_m - current_y_m);
+    for (std::size_t index = nearest_index + 1; index < path.size(); ++index) {
+        remaining_distance_m += planarDistanceMeters(path[index - 1], path[index]);
+    }
+    return remaining_distance_m;
+}
+
 std::string mergeLivePayloadWithSavedPhoto(
     std::string live_payload,
     const std::string& saved_payload) {
@@ -1077,6 +1452,7 @@ bool LogDashboardServer::listen(const std::string& host, int port) {
 
 void LogDashboardServer::stop() {
     server_.stop();
+    stopAutoWorkspaceControl();
     stopAutoAvoidControl();
     stopRuntimeLogBridge();
     stopRosBridge();
@@ -1118,6 +1494,8 @@ bool LogDashboardServer::stopModeSwitchReady(std::string& reason) const {
     };
 
     const bool gps_ready =
+        gps_state.filtered_valid &&
+        gps_state.status >= 0 &&
         gps_state.message_count > 0 &&
         (now_steady - gps_state.last_message_steady_) <= kSensorFreshWindow;
     const bool imu_ready =
@@ -1199,38 +1577,530 @@ void LogDashboardServer::configureRoutes() {
             "application/json; charset=UTF-8");
     });
 
-    server_.Get("/api/rgb_yolo/live.mjpg", [this](const httplib::Request&, httplib::Response& res) {
-        const fs::path live_frame_path = fs::path(storage_root_) / "live" / "rgb_yolo_live.jpg";
-        res.set_header("Cache-Control", "no-store, no-cache, must-revalidate");
-        res.set_header("Pragma", "no-cache");
-        res.set_chunked_content_provider(
-            "multipart/x-mixed-replace; boundary=frame",
-            [live_frame_path](size_t, httplib::DataSink& sink) {
-                while (sink.is_writable && sink.is_writable()) {
-                    const std::string frame = readFileText(live_frame_path);
-                    if (!frame.empty()) {
-                        std::ostringstream header;
-                        header << "--frame\r\n"
-                               << "Content-Type: image/jpeg\r\n"
-                               << "Content-Length: " << frame.size() << "\r\n\r\n";
-                        const std::string header_text = header.str();
-                        if (!sink.write(header_text.data(), header_text.size())) {
-                            break;
-                        }
-                        if (!sink.write(frame.data(), frame.size())) {
-                            break;
-                        }
-                        if (!sink.write("\r\n", 2)) {
-                            break;
-                        }
+    server_.Get("/api/auto/workspace/config", [this](const httplib::Request&, httplib::Response& res) {
+        const std::string tianditu_map_tk =
+            trimWhitespace(envStringOrDefault("TIANDITU_MAP_TK", ""));
+        const std::string route_provider =
+            normalizeRouteProvider(envStringOrDefault("AUTO_WORKSPACE_ROUTE_PROVIDER", "auto"));
+        const std::string effective_route_provider =
+            route_provider == "auto" ? "osrm" : route_provider;
+        AutoWorkspaceLocalFrameState local_frame_state;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            local_frame_state = auto_workspace_local_frame_state_;
+        }
+
+        std::ostringstream out;
+        out << "{"
+            << "\"ok\":true,"
+            << "\"workspace\":\"AUTO\","
+            << "\"map\":{"
+            << "\"provider\":\"" << jsonEscape(
+                effective_route_provider == "osrm" ? "osm" : "tianditu") << "\","
+            << "\"configured\":" << boolJson(
+                effective_route_provider == "osrm" || !tianditu_map_tk.empty()) << ","
+            << "\"tk\":\"" << jsonEscape(
+                effective_route_provider == "osrm" ? "" : tianditu_map_tk) << "\","
+            << "\"tiles_url\":\"" << jsonEscape(
+                effective_route_provider == "osrm" ?
+                    "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" :
+                    "") << "\","
+            << "\"radius_m\":100"
+            << "},"
+            << "\"gps_topic\":\"/fix\","
+            << "\"imu_topic\":\"/imu/data_corrected\","
+            << "\"planning_mode\":\"backend_road_route\","
+            << "\"route_provider\":\"" << jsonEscape(effective_route_provider) << "\","
+            << "\"coordinate_frame\":{"
+            << "\"mode\":\"local_xy\","
+            << "\"x_axis\":\"east_m\","
+            << "\"y_axis\":\"north_m\","
+            << "\"origin_valid\":" << boolJson(local_frame_state.valid) << ","
+            << "\"origin_latitude\":" << (local_frame_state.valid ? numberJson(local_frame_state.origin_latitude, 7) : "null") << ","
+            << "\"origin_longitude\":" << (local_frame_state.valid ? numberJson(local_frame_state.origin_longitude, 7) : "null") << ","
+            << "\"origin_altitude_m\":" << (local_frame_state.valid ? numberJson(local_frame_state.origin_altitude, 2) : "null")
+            << "}"
+            << "}";
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(out.str(), "application/json; charset=UTF-8");
+    });
+
+    server_.Post("/api/auto/plan_preview", [this, setJson](const httplib::Request& req, httplib::Response& res) {
+        const auto destination_x_m = parseJsonDoubleField(req.body, "x_m");
+        const auto destination_y_m = parseJsonDoubleField(req.body, "y_m");
+        if (!destination_x_m.has_value() || !destination_y_m.has_value()) {
+            setJson(
+                res,
+                400,
+                "{\"ok\":false,\"message\":\"终点 XY 参数非法\",\"status\":\"bad_request\"}");
+            return;
+        }
+
+        GpsRuntimeState gps_state;
+        ImuRuntimeState imu_state;
+        AutoWorkspaceLocalFrameState local_frame_state;
+        AutoWorkspaceRuntimeState auto_workspace_runtime_state;
+        const auto now_steady = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            gps_state = gps_state_;
+            imu_state = imu_state_;
+            local_frame_state = auto_workspace_local_frame_state_;
+            auto_workspace_runtime_state = auto_workspace_runtime_state_;
+        }
+
+        if (auto_workspace_runtime_state.task_running) {
+            setJson(
+                res,
+                409,
+                "{\"ok\":false,\"message\":\"自动任务运行中，请先停止任务再重新规划\",\"status\":\"auto_task_running\"}");
+            return;
+        }
+
+        const bool gps_ready =
+            gps_state.filtered_valid &&
+            gps_state.status >= 0 &&
+            gps_state.message_count > 0 &&
+            (now_steady - gps_state.last_message_steady_) <= kSensorFreshWindow &&
+            std::isfinite(gps_state.latitude) &&
+            std::isfinite(gps_state.longitude);
+        if (!gps_ready) {
+            setJson(
+                res,
+                409,
+                "{\"ok\":false,\"message\":\"当前 GPS 未就绪，无法生成自动工作区路径\",\"status\":\"gps_not_ready\"}");
+            return;
+        }
+        if (!local_frame_state.valid) {
+            setJson(
+                res,
+                409,
+                "{\"ok\":false,\"message\":\"自动工作区 XY 原点尚未锁定\",\"status\":\"xy_origin_not_ready\"}");
+            return;
+        }
+
+        const double origin_lat = gps_state.latitude;
+        const double origin_lon = gps_state.longitude;
+        const auto [requested_destination_lat, requested_destination_lon] =
+            latLonFromLocalPlanarOffsetMeters(
+            local_frame_state.origin_latitude,
+            local_frame_state.origin_longitude,
+            *destination_x_m,
+            *destination_y_m);
+        const auto [current_x_m, current_y_m] = localPlanarOffsetMeters(
+            local_frame_state.origin_latitude,
+            local_frame_state.origin_longitude,
+            origin_lat,
+            origin_lon);
+        const auto route_plan = requestAutoWorkspaceRoadRoute(
+            origin_lat,
+            origin_lon,
+            requested_destination_lat,
+            requested_destination_lon);
+        if (!route_plan.ok) {
+            setJson(
+                res,
+                502,
+                std::string("{\"ok\":false,\"message\":\"") +
+                    jsonEscape(route_plan.message.empty() ? "道路路线规划失败" : route_plan.message) +
+                    "\",\"status\":\"route_unavailable\"}");
+            return;
+        }
+
+        std::vector<AutoWorkspacePlanState::PreviewPoint> preview_path;
+        preview_path.reserve(route_plan.path.size() + 1);
+        const auto append_preview_point =
+            [&](double latitude, double longitude, bool force) {
+                if (!std::isfinite(latitude) || !std::isfinite(longitude)) {
+                    return;
+                }
+                const auto [x_m, y_m] = localPlanarOffsetMeters(
+                    local_frame_state.origin_latitude,
+                    local_frame_state.origin_longitude,
+                    latitude,
+                    longitude);
+                AutoWorkspacePlanState::PreviewPoint preview_point;
+                preview_point.latitude = latitude;
+                preview_point.longitude = longitude;
+                preview_point.x_m = x_m;
+                preview_point.y_m = y_m;
+                if (!preview_path.empty() && !force) {
+                    const auto& last_point = preview_path.back();
+                    if (std::hypot(
+                            preview_point.x_m - last_point.x_m,
+                            preview_point.y_m - last_point.y_m) < kAutoWorkspaceRoutePointSpacingM) {
+                        return;
                     }
-                    std::this_thread::sleep_for(kRgbYoloMjpegFrameInterval);
                 }
-                if (sink.done) {
-                    sink.done();
-                }
-                return true;
-            });
+                preview_path.push_back(preview_point);
+            };
+
+        if (!route_plan.path.empty()) {
+            const auto& first_route_point = route_plan.path.front();
+            if (haversineDistanceMeters(
+                    origin_lat,
+                    origin_lon,
+                    first_route_point.latitude,
+                    first_route_point.longitude) > 0.8) {
+                append_preview_point(origin_lat, origin_lon, true);
+            }
+        }
+        for (const auto& point : route_plan.path) {
+            append_preview_point(point.latitude, point.longitude, false);
+        }
+        if (preview_path.size() == 1) {
+            append_preview_point(requested_destination_lat, requested_destination_lon, true);
+        }
+        if (preview_path.empty()) {
+            setJson(
+                res,
+                502,
+                "{\"ok\":false,\"message\":\"道路路线规划没有返回可执行路径\",\"status\":\"route_empty\"}");
+            return;
+        }
+        if (preview_path.size() > kAutoWorkspaceRouteMaxPoints) {
+            std::vector<AutoWorkspacePlanState::PreviewPoint> reduced_path;
+            reduced_path.reserve(kAutoWorkspaceRouteMaxPoints);
+            reduced_path.push_back(preview_path.front());
+            const std::size_t interior_points = kAutoWorkspaceRouteMaxPoints - 2;
+            const std::size_t denominator = std::max<std::size_t>(1, interior_points);
+            for (std::size_t index = 1; index + 1 < kAutoWorkspaceRouteMaxPoints; ++index) {
+                const std::size_t source_index =
+                    1 + ((preview_path.size() - 2) * index) / denominator;
+                reduced_path.push_back(preview_path[std::min(source_index, preview_path.size() - 2)]);
+            }
+            reduced_path.push_back(preview_path.back());
+            preview_path = std::move(reduced_path);
+        }
+
+        const auto& routed_destination = preview_path.back();
+        double distance_m = route_plan.distance_m;
+        if (!std::isfinite(distance_m) || distance_m <= 0.0) {
+            distance_m = remainingPathDistanceMeters(preview_path, 0, current_x_m, current_y_m);
+        }
+        double bearing_deg =
+            initialBearingDeg(origin_lat, origin_lon, routed_destination.latitude, routed_destination.longitude);
+        if (preview_path.size() >= 2) {
+            const std::size_t target_index =
+                lookaheadPathPointIndex(preview_path, 0, current_x_m, current_y_m, 3.0);
+            bearing_deg = initialBearingDeg(
+                origin_lat,
+                origin_lon,
+                preview_path[target_index].latitude,
+                preview_path[target_index].longitude);
+        }
+
+        std::ostringstream path_json;
+        path_json << "[";
+        for (std::size_t index = 0; index < preview_path.size(); ++index) {
+            if (index > 0) {
+                path_json << ",";
+            }
+            const auto& point = preview_path[index];
+            path_json << "{"
+                      << "\"latitude\":" << numberJson(point.latitude, 7) << ","
+                      << "\"longitude\":" << numberJson(point.longitude, 7) << ","
+                      << "\"x_m\":" << numberJson(point.x_m, 3) << ","
+                      << "\"y_m\":" << numberJson(point.y_m, 3)
+                      << "}";
+        }
+        path_json << "]";
+
+        std::ostringstream out;
+        out << "{"
+            << "\"ok\":true,"
+            << "\"workspace\":\"AUTO\","
+            << "\"planner\":\"" << jsonEscape(route_plan.planner) << "\","
+            << "\"route_provider\":\"" << jsonEscape(route_plan.provider) << "\","
+            << "\"distance_m\":" << numberJson(distance_m, 2) << ","
+            << "\"duration_s\":" << numberJson(route_plan.duration_s, 1) << ","
+            << "\"bearing_deg\":" << numberJson(bearing_deg, 2) << ","
+            << "\"coordinate_frame\":{"
+            << "\"mode\":\"local_xy\","
+            << "\"x_axis\":\"east_m\","
+            << "\"y_axis\":\"north_m\""
+            << "},"
+            << "\"origin\":{"
+            << "\"latitude\":" << numberJson(local_frame_state.origin_latitude, 7) << ","
+            << "\"longitude\":" << numberJson(local_frame_state.origin_longitude, 7) << ","
+            << "\"altitude_m\":" << numberJson(local_frame_state.origin_altitude, 2)
+            << "},"
+            << "\"current\":{"
+            << "\"latitude\":" << numberJson(origin_lat, 7) << ","
+            << "\"longitude\":" << numberJson(origin_lon, 7) << ","
+            << "\"x_m\":" << numberJson(current_x_m, 3) << ","
+            << "\"y_m\":" << numberJson(current_y_m, 3)
+            << "},"
+            << "\"destination\":{"
+            << "\"latitude\":" << numberJson(routed_destination.latitude, 7) << ","
+            << "\"longitude\":" << numberJson(routed_destination.longitude, 7) << ","
+            << "\"x_m\":" << numberJson(routed_destination.x_m, 3) << ","
+            << "\"y_m\":" << numberJson(routed_destination.y_m, 3)
+            << "},"
+            << "\"requested_destination\":{"
+            << "\"latitude\":" << numberJson(requested_destination_lat, 7) << ","
+            << "\"longitude\":" << numberJson(requested_destination_lon, 7) << ","
+            << "\"x_m\":" << numberJson(*destination_x_m, 3) << ","
+            << "\"y_m\":" << numberJson(*destination_y_m, 3)
+            << "},"
+            << "\"imu\":{"
+            << "\"valid\":" << boolJson(
+                imu_state.has_attitude &&
+                imu_state.message_count > 0 &&
+                (now_steady - imu_state.last_message_steady_) <= kSensorFreshWindow) << ","
+            << "\"yaw_deg\":" << numberJson(imu_state.yaw_deg, 1)
+            << "},"
+            << "\"path\":" << path_json.str()
+            << "}";
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            auto_workspace_plan_state_.valid = true;
+            auto_workspace_plan_state_.origin_latitude = local_frame_state.origin_latitude;
+            auto_workspace_plan_state_.origin_longitude = local_frame_state.origin_longitude;
+            auto_workspace_plan_state_.destination_latitude = routed_destination.latitude;
+            auto_workspace_plan_state_.destination_longitude = routed_destination.longitude;
+            auto_workspace_plan_state_.destination_x_m = routed_destination.x_m;
+            auto_workspace_plan_state_.destination_y_m = routed_destination.y_m;
+            auto_workspace_plan_state_.preview_distance_m = distance_m;
+            auto_workspace_plan_state_.preview_duration_s = route_plan.duration_s;
+            auto_workspace_plan_state_.preview_bearing_deg = bearing_deg;
+            auto_workspace_plan_state_.planner = route_plan.planner;
+            auto_workspace_plan_state_.route_provider = route_plan.provider;
+            auto_workspace_plan_state_.preview_path = std::move(preview_path);
+            auto_workspace_runtime_state_.plan_ready = true;
+            auto_workspace_runtime_state_.target_reached = false;
+            auto_workspace_runtime_state_.destination_x_m = routed_destination.x_m;
+            auto_workspace_runtime_state_.destination_y_m = routed_destination.y_m;
+            auto_workspace_runtime_state_.remaining_distance_m = distance_m;
+            auto_workspace_runtime_state_.target_bearing_deg = bearing_deg;
+            auto_workspace_runtime_state_.active_path_index = 0;
+            auto_workspace_runtime_state_.route_provider = route_plan.provider;
+            auto_workspace_runtime_state_.phase = "planned";
+            auto_workspace_runtime_state_.message = "自动道路路径已生成，等待开始任务";
+        }
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(out.str(), "application/json; charset=UTF-8");
+    });
+
+    server_.Post("/api/auto/start", [this, setJson](const httplib::Request&, httplib::Response& res) {
+        bool ready = false;
+        {
+            std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
+            ready = static_cast<bool>(to_stm_);
+        }
+        if (!ready) {
+            setJson(
+                res,
+                503,
+                "{\"ok\":false,\"message\":\"STM32 未初始化\",\"status\":\"failed_not_ready\"}");
+            return;
+        }
+
+        std::string active_mode;
+        AutoWorkspacePlanState auto_workspace_plan_state;
+        AutoWorkspaceRuntimeState auto_workspace_runtime_state;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            active_mode = active_workspace_mode_;
+            auto_workspace_plan_state = auto_workspace_plan_state_;
+            auto_workspace_runtime_state = auto_workspace_runtime_state_;
+        }
+        if (active_mode != "AUTO") {
+            setJson(
+                res,
+                409,
+                "{\"ok\":false,\"message\":\"当前不在自动工作区\",\"status\":\"wrong_workspace\"}");
+            return;
+        }
+        if (!auto_workspace_plan_state.valid) {
+            setJson(
+                res,
+                409,
+                "{\"ok\":false,\"message\":\"请先完成自动道路路径规划\",\"status\":\"plan_not_ready\"}");
+            return;
+        }
+        if (auto_workspace_runtime_state.task_running) {
+            setJson(
+                res,
+                409,
+                "{\"ok\":false,\"message\":\"自动任务已经在运行\",\"status\":\"auto_task_running\"}");
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            auto_workspace_runtime_state_.awaiting_start_ack = true;
+            auto_workspace_runtime_state_.target_reached = false;
+            auto_workspace_runtime_state_.phase = "awaiting_start_ack";
+            auto_workspace_runtime_state_.message = "自动任务正在等待 start ACK";
+        }
+        log_info(kLogModule, "auto workspace start requested; awaiting start ACK");
+
+        bool ok = false;
+        {
+            std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
+            if (to_stm_) {
+                UartTraceContext trace_context;
+                trace_context.source = "auto_workspace_start";
+                trace_context.thread_tag = "api_handler";
+                ScopedUartTraceContext trace_scope(trace_context);
+                ok = to_stm_->sendStartWaitOk();
+            }
+        }
+
+        bool enter_working_mode = false;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            enter_working_mode =
+                ok &&
+                auto_workspace_runtime_state_.awaiting_start_ack &&
+                active_workspace_mode_ == "AUTO" &&
+                auto_workspace_plan_state_.valid;
+            auto_workspace_runtime_state_.awaiting_start_ack = false;
+            if (enter_working_mode) {
+                auto_workspace_runtime_state_.task_running = true;
+                auto_workspace_runtime_state_.phase = "tracking";
+                auto_workspace_runtime_state_.message = "自动任务已启动，准备沿道路路径前进";
+            } else if (ok) {
+                auto_workspace_runtime_state_.message = "start ACK 已收到，但自动任务未进入运行态";
+            } else {
+                auto_workspace_runtime_state_.message = "自动任务 start ACK 失败，未进入运行态";
+            }
+        }
+
+        if (enter_working_mode) {
+            auto_avoid_stm32_drive_enabled_.store(true);
+            startAutoWorkspaceControl();
+            setJson(
+                res,
+                200,
+                stm32DirectResultJson(
+                    "auto_workspace_start",
+                    "#C3=1!",
+                    true,
+                    "sent",
+                    "自动任务已启动"));
+            return;
+        }
+
+        auto_avoid_stm32_drive_enabled_.store(false);
+        setJson(
+            res,
+            ok ? 409 : 500,
+            stm32DirectResultJson(
+                "auto_workspace_start",
+                "#C3=1!",
+                false,
+                ok ? "start_canceled" : "failed_send",
+                ok ? "start ACK 已收到，但未进入自动任务运行态" : "自动任务 start ACK 失败"));
+    });
+
+    server_.Post("/api/auto/clear_plan", [this, setJson](const httplib::Request&, httplib::Response& res) {
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (auto_workspace_runtime_state_.task_running) {
+                setJson(
+                    res,
+                    409,
+                    "{\"ok\":false,\"message\":\"自动任务运行中，请先停止任务再清除路径\",\"status\":\"auto_task_running\"}");
+                return;
+            }
+            auto_workspace_plan_state_ = AutoWorkspacePlanState{};
+            auto_workspace_runtime_state_.plan_ready = false;
+            auto_workspace_runtime_state_.target_reached = false;
+            auto_workspace_runtime_state_.destination_x_m = 0.0;
+            auto_workspace_runtime_state_.destination_y_m = 0.0;
+            auto_workspace_runtime_state_.remaining_distance_m = 0.0;
+            auto_workspace_runtime_state_.target_bearing_deg = 0.0;
+            auto_workspace_runtime_state_.heading_error_deg = 0.0;
+            auto_workspace_runtime_state_.active_path_index = 0;
+            auto_workspace_runtime_state_.route_provider.clear();
+            auto_workspace_runtime_state_.phase = "idle";
+            auto_workspace_runtime_state_.message = "自动道路路径已清除";
+        }
+        setJson(
+            res,
+            200,
+            "{\"ok\":true,\"message\":\"自动道路路径已清除\",\"status\":\"cleared\"}");
+    });
+
+    server_.Post("/api/auto/stop", [this, setJson](const httplib::Request&, httplib::Response& res) {
+        std::string active_mode;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            active_mode = active_workspace_mode_;
+        }
+        if (active_mode != "AUTO") {
+            setJson(
+                res,
+                409,
+                "{\"ok\":false,\"message\":\"当前不在自动工作区\",\"status\":\"wrong_workspace\"}");
+            return;
+        }
+
+        stopAutoWorkspaceControl(false);
+
+        bool ready = false;
+        bool angle_ok = false;
+        bool stop_ok = false;
+        {
+            std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
+            ready = static_cast<bool>(to_stm_);
+            if (to_stm_) {
+                UartTraceContext angle_context;
+                angle_context.source = "auto_workspace_stop";
+                angle_context.thread_tag = "api_handler";
+                angle_context.has_steering_value = true;
+                angle_context.steering_value = 0;
+                ScopedUartTraceContext angle_scope(angle_context);
+                angle_ok = to_stm_->sendAngleWaitOk(0);
+
+                UartTraceContext stop_context;
+                stop_context.source = "auto_workspace_stop";
+                stop_context.thread_tag = "api_handler";
+                ScopedUartTraceContext stop_scope(stop_context);
+                stop_ok = to_stm_->sendStopWaitOk();
+            }
+        }
+        auto_avoid_stm32_drive_enabled_.store(false);
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            auto_workspace_runtime_state_.awaiting_start_ack = false;
+            auto_workspace_runtime_state_.task_running = false;
+            auto_workspace_runtime_state_.avoidance_active = false;
+            auto_workspace_runtime_state_.active_path_index = 0;
+            auto_workspace_runtime_state_.phase = "stopped";
+            auto_workspace_runtime_state_.message = "自动任务已停止";
+            auto_workspace_runtime_state_.command_speed_cm_s = 0;
+            auto_workspace_runtime_state_.command_steering_encoder = 0;
+            vehicle_command_state_.has_speed = true;
+            vehicle_command_state_.speed = 0;
+            vehicle_command_state_.has_angle = true;
+            vehicle_command_state_.angle = 0;
+        }
+
+        if (!ready) {
+            setJson(
+                res,
+                503,
+                stm32DirectResultJson(
+                    "auto_workspace_stop",
+                    "#C3=0!",
+                    false,
+                    "failed_not_ready",
+                    "STM32 未初始化"));
+            return;
+        }
+
+        setJson(
+            res,
+            (stop_ok ? 200 : 500),
+            stm32DirectResultJson(
+                "auto_workspace_stop",
+                "#C3=0!",
+                stop_ok,
+                stop_ok ? (angle_ok ? "sent" : "sent_recenter_failed") : "failed_send",
+                stop_ok ? "自动任务已停止" : "自动任务停止发送失败"));
     });
 
     server_.Get("/api/lidar/sectors", [this](const httplib::Request&, httplib::Response& res) {
@@ -1241,10 +2111,12 @@ void LogDashboardServer::configureRoutes() {
 
         LidarRuntimeState lidar_state;
         ImuRuntimeState imu_state;
+        AutoAvoidRuntimeState auto_avoid_runtime_state;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             lidar_state = lidar_state_;
             imu_state = imu_state_;
+            auto_avoid_runtime_state = auto_avoid_runtime_state_;
         }
 
         const bool lidar_key_valid =
@@ -1258,6 +2130,33 @@ void LogDashboardServer::configureRoutes() {
             imu_state.has_attitude &&
             imu_state.message_count > 0 &&
             (now_steady - imu_state.last_message_steady_) <= kSensorFreshWindow;
+        const auto& filtered_front_debug = auto_avoid_runtime_state.last_decision.debug;
+        const bool control_front_valid =
+            stack_process.running &&
+            auto_avoid_runtime_state.has_decision &&
+            auto_avoid_runtime_state.lidar_valid &&
+            filtered_front_debug.control_snapshot_fresh &&
+            filtered_front_debug.front_nearest_valid &&
+            std::isfinite(filtered_front_debug.front_nearest_m) &&
+            std::isfinite(filtered_front_debug.front_angle_deg);
+        const std::string front_nearest_zone =
+            control_front_valid ?
+                AutoAvoidInputBuilder::frontNearestZoneFromAngle(
+                    filtered_front_debug.front_angle_deg,
+                    lidar_state.filtered_front_nearest_zone) :
+                (lidar_key_valid ? lidar_state.filtered_front_nearest_zone : std::string());
+        const int front_valid_points =
+            control_front_valid ?
+                filtered_front_debug.front_support_points :
+                lidar_state.filtered_auto_avoid_front_sector.valid_points;
+        const int front_support_points =
+            control_front_valid ?
+                filtered_front_debug.front_support_points :
+                lidar_state.filtered_auto_avoid_front_sector.support_points;
+        const auto& front_target_selection =
+            control_front_valid ?
+                filtered_front_debug.front_target_selection :
+                lidar_state.front_target_selection;
 
         std::ostringstream out;
         out << "{"
@@ -1270,26 +2169,84 @@ void LogDashboardServer::configureRoutes() {
             << "},"
             << "\"lidar\":{"
             << "\"valid\":" << boolJson(lidar_key_valid) << ","
-            << "\"front_nearest_zone\":\"" << jsonEscape(lidar_key_valid ? lidar_state.front_nearest_zone : std::string()) << "\","
+            << "\"front_nearest_zone\":\"" << jsonEscape(front_nearest_zone) << "\","
             << "\"sectors\":{"
             << "\"negative_front\":{"
             << "\"valid\":" << boolJson(lidar_key_valid && lidar_state.negative_front_sector.valid) << ","
             << "\"nearest_m\":" << (lidar_key_valid && lidar_state.negative_front_sector.valid ? numberJson(lidar_state.negative_front_sector.nearest_m, 2) : "null") << ","
             << "\"nearest_angle_deg\":" << (lidar_key_valid && lidar_state.negative_front_sector.valid ? numberJson(lidar_state.negative_front_sector.nearest_angle_deg, 1) : "null") << ","
-            << "\"valid_points\":" << lidar_state.negative_front_sector.valid_points
+            << "\"valid_points\":" << lidar_state.negative_front_sector.valid_points << ","
+            << "\"support_points\":" << lidar_state.negative_front_sector.support_points
             << "},"
             << "\"front\":{"
-            << "\"valid\":" << boolJson(lidar_key_valid && lidar_state.auto_avoid_front_sector.valid) << ","
-            << "\"nearest_m\":" << (lidar_key_valid && lidar_state.auto_avoid_front_sector.valid ? numberJson(lidar_state.auto_avoid_front_sector.nearest_m, 2) : "null") << ","
-            << "\"nearest_angle_deg\":" << (lidar_key_valid && lidar_state.auto_avoid_front_sector.valid ? numberJson(lidar_state.auto_avoid_front_sector.nearest_angle_deg, 1) : "null") << ","
-            << "\"valid_points\":" << lidar_state.auto_avoid_front_sector.valid_points
+            << "\"valid\":" << boolJson(
+                    control_front_valid ||
+                    (lidar_key_valid && lidar_state.filtered_auto_avoid_front_sector.valid)) << ","
+            << "\"nearest_m\":" << (
+                    control_front_valid ?
+                        numberJson(filtered_front_debug.front_nearest_m, 2) :
+                        (lidar_key_valid && lidar_state.filtered_auto_avoid_front_sector.valid ?
+                            numberJson(lidar_state.filtered_auto_avoid_front_sector.nearest_m, 2) :
+                            "null")) << ","
+            << "\"nearest_angle_deg\":" << (
+                    control_front_valid ?
+                        numberJson(filtered_front_debug.front_angle_deg, 1) :
+                        (lidar_key_valid && lidar_state.filtered_auto_avoid_front_sector.valid ?
+                            numberJson(lidar_state.filtered_auto_avoid_front_sector.nearest_angle_deg, 1) :
+                            "null")) << ","
+            << "\"valid_points\":" << front_valid_points << ","
+            << "\"support_points\":" << front_support_points
             << "},"
             << "\"positive_front\":{"
             << "\"valid\":" << boolJson(lidar_key_valid && lidar_state.positive_front_sector.valid) << ","
             << "\"nearest_m\":" << (lidar_key_valid && lidar_state.positive_front_sector.valid ? numberJson(lidar_state.positive_front_sector.nearest_m, 2) : "null") << ","
             << "\"nearest_angle_deg\":" << (lidar_key_valid && lidar_state.positive_front_sector.valid ? numberJson(lidar_state.positive_front_sector.nearest_angle_deg, 1) : "null") << ","
-            << "\"valid_points\":" << lidar_state.positive_front_sector.valid_points
+            << "\"valid_points\":" << lidar_state.positive_front_sector.valid_points << ","
+            << "\"support_points\":" << lidar_state.positive_front_sector.support_points
             << "}"
+            << "},"
+            << "\"front_target_selection\":{"
+            << "\"valid\":" << boolJson(front_target_selection.valid) << ","
+            << "\"selected_front_cluster_id\":" << (
+                    front_target_selection.valid ?
+                        std::to_string(front_target_selection.selected_front_cluster_id) :
+                        "null") << ","
+            << "\"selected_front_cluster_score\":" << (
+                    front_target_selection.valid ?
+                        numberJson(front_target_selection.selected_front_cluster_score, 2) :
+                        "null") << ","
+            << "\"selected_front_cluster_wall_like\":" <<
+                boolJson(front_target_selection.selected_front_cluster_wall_like) << ","
+            << "\"selected_front_cluster_is_discrete_primary\":" <<
+                boolJson(front_target_selection.selected_front_cluster_is_discrete_primary) << ","
+            << "\"selected_front_cluster_is_wall_like\":" <<
+                boolJson(front_target_selection.selected_front_cluster_is_wall_like) << ","
+            << "\"selected_front_cluster_points\":" <<
+                front_target_selection.selected_front_cluster_points << ","
+            << "\"selected_front_cluster_span_deg\":" << (
+                    front_target_selection.valid ?
+                        numberJson(front_target_selection.selected_front_cluster_span_deg, 1) :
+                        "null") << ","
+            << "\"selected_front_cluster_median_range\":" << (
+                    front_target_selection.valid ?
+                        numberJson(front_target_selection.selected_front_cluster_median_range, 2) :
+                        "null") << ","
+            << "\"selected_front_cluster_nearest_range\":" << (
+                    front_target_selection.valid ?
+                        numberJson(front_target_selection.selected_front_cluster_nearest_range, 2) :
+                        "null") << ","
+            << "\"wall_like_cluster_suppressed\":" <<
+                boolJson(front_target_selection.wall_like_cluster_suppressed) << ","
+            << "\"raw_zone_from_discrete_target\":" <<
+                boolJson(front_target_selection.raw_zone_from_discrete_target) << ","
+            << "\"wall_like_suppressed_from_zone\":" <<
+                boolJson(front_target_selection.wall_like_suppressed_from_zone) << ","
+            << "\"front_target_role\":\"" <<
+                jsonEscape(front_target_selection.front_target_role) << "\","
+            << "\"front_target_selection_reason\":\"" <<
+                jsonEscape(front_target_selection.front_target_selection_reason) << "\","
+            << "\"raw_zone_source\":\"" <<
+                jsonEscape(front_target_selection.raw_zone_source) << "\""
             << "}"
             << "}"
             << "}";
@@ -1335,6 +2292,7 @@ void LogDashboardServer::configureRoutes() {
     server_.Post("/api/system/emergency_stop", [this, setJson](const httplib::Request&, httplib::Response& res) {
         bool ready = false;
         bool stm32_sent = false;
+        stopAutoWorkspaceControl(false);
         stopAutoAvoidControl();
         auto_avoid_stm32_drive_enabled_.store(false);
         {
@@ -1354,6 +2312,14 @@ void LogDashboardServer::configureRoutes() {
             std::lock_guard<std::mutex> lock(state_mutex_);
             active_workspace_mode_ = "STOP";
             manual_workspace_working_ = false;
+            auto_workspace_runtime_state_.awaiting_start_ack = false;
+            auto_workspace_runtime_state_.task_running = false;
+            auto_workspace_runtime_state_.avoidance_active = false;
+            auto_workspace_runtime_state_.active_path_index = 0;
+            auto_workspace_runtime_state_.phase = "stopped";
+            auto_workspace_runtime_state_.message = "系统急停，自动任务已停止";
+            auto_workspace_runtime_state_.command_speed_cm_s = 0;
+            auto_workspace_runtime_state_.command_steering_encoder = 0;
             vehicle_command_state_.has_speed = true;
             vehicle_command_state_.speed = 0;
         }
@@ -1430,10 +2396,12 @@ void LogDashboardServer::configureRoutes() {
 
         std::string current_mode;
         bool manual_working = false;
+        bool auto_task_running = false;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             current_mode = active_workspace_mode_;
             manual_working = manual_workspace_working_;
+            auto_task_running = auto_workspace_runtime_state_.task_running;
         }
 
         if (current_mode == target_mode) {
@@ -1500,6 +2468,15 @@ void LogDashboardServer::configureRoutes() {
                 "{\"ok\":false,\"message\":\"避障任务运行中，请先停止任务再切换工作区\",\"status\":\"avoidance_task_running\"}");
             return;
         }
+        if (current_mode == "AUTO" &&
+            target_mode != "AUTO" &&
+            auto_task_running) {
+            setJson(
+                res,
+                409,
+                "{\"ok\":false,\"message\":\"自动任务运行中，请先停止任务再切换工作区\",\"status\":\"auto_task_running\"}");
+            return;
+        }
 
         bool cleared_avoidance_start_ack_pending = false;
         {
@@ -1513,6 +2490,16 @@ void LogDashboardServer::configureRoutes() {
                 avoidance_start_ack_pending_ = false;
                 vehicle_command_state_.has_speed = true;
                 vehicle_command_state_.speed = 0;
+            }
+            if (current_mode == "AUTO" && target_mode != "AUTO") {
+                auto_workspace_runtime_state_.awaiting_start_ack = false;
+                auto_workspace_runtime_state_.task_running = false;
+                auto_workspace_runtime_state_.avoidance_active = false;
+                auto_workspace_runtime_state_.active_path_index = 0;
+                if (auto_workspace_runtime_state_.phase != "arrived") {
+                    auto_workspace_runtime_state_.phase = "idle";
+                    auto_workspace_runtime_state_.message = "自动工作区待命";
+                }
             }
         }
 
@@ -1896,31 +2883,38 @@ void LogDashboardServer::configureRoutes() {
     });
 
     server_.Get("/api/logs/stream", [](const httplib::Request&, httplib::Response& res) {
-        res.set_header("Cache-Control", "no-cache");
-        res.set_header("Connection", "keep-alive");
-        res.set_header("X-Accel-Buffering", "no");
+        std::ostringstream out;
+        out << "retry: 30000\n"
+            << "event: snapshot\n"
+            << "data: " << entriesToJson(logger_snapshot()) << "\n\n";
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(out.str(), "text/event-stream; charset=UTF-8");
+    });
 
-        auto state = std::make_shared<StreamState>();
-        res.set_chunked_content_provider(
-            "text/event-stream",
-            [state](size_t, httplib::DataSink& sink) {
-                if (!state->snapshot_sent) {
-                    const auto snapshot = logger_snapshot();
-                    state->last_sequence = logger_latest_sequence();
-                    state->snapshot_sent = true;
-                    return writeSseEvent(sink, "snapshot", entriesToJson(snapshot));
-                }
+    server_.Get("/api/logs/recent", [](const httplib::Request& req, httplib::Response& res) {
+        std::uint64_t after_sequence = 0;
+        if (req.has_param("after")) {
+            try {
+                after_sequence = static_cast<std::uint64_t>(std::stoull(req.get_param_value("after")));
+            } catch (...) {
+                after_sequence = 0;
+            }
+        }
 
-                std::vector<LoggerEntry> new_entries;
-                if (logger_wait_for_entries(state->last_sequence, 1500, new_entries)) {
-                    if (!new_entries.empty()) {
-                        state->last_sequence = new_entries.back().sequence;
-                        return writeSseEvent(sink, "entries", entriesToJson(new_entries));
-                    }
-                }
+        const auto entries = after_sequence > 0
+            ? logger_entries_after(after_sequence)
+            : logger_snapshot();
+        const auto latest_sequence = logger_latest_sequence();
 
-                return writeSseEvent(sink, "keepalive", "{\"ok\":true}");
-            });
+        std::ostringstream out;
+        out << "{"
+            << "\"ok\":true,"
+            << "\"latest_sequence\":" << latest_sequence << ","
+            << "\"entries\":" << entriesToJson(entries)
+            << "}";
+
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(out.str(), "application/json; charset=UTF-8");
     });
 
     server_.Get("/api/logs/config", [](const httplib::Request&, httplib::Response& res) {
@@ -2500,6 +3494,504 @@ void LogDashboardServer::runAutoAvoidControlLoop() {
     }
 }
 
+void LogDashboardServer::startAutoWorkspaceControl() {
+    if (auto_workspace_control_running_.exchange(true)) {
+        return;
+    }
+
+    auto_workspace_control_thread_ =
+        std::thread(&LogDashboardServer::runAutoWorkspaceControlLoop, this);
+    log_info(kLogModule, "auto workspace control loop started");
+}
+
+void LogDashboardServer::stopAutoWorkspaceControl(bool send_stop) {
+    const bool was_running = auto_workspace_control_running_.exchange(false);
+    if (was_running && auto_workspace_control_thread_.joinable()) {
+        auto_workspace_control_thread_.join();
+    }
+
+    auto_avoid_controller_.reset();
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        auto_workspace_runtime_state_.awaiting_start_ack = false;
+        auto_workspace_runtime_state_.task_running = false;
+        auto_workspace_runtime_state_.avoidance_active = false;
+        auto_workspace_runtime_state_.active_path_index = 0;
+        auto_workspace_runtime_state_.command_speed_cm_s = 0;
+        auto_workspace_runtime_state_.command_steering_encoder = 0;
+    }
+
+    if (send_stop) {
+        bool angle_ok = false;
+        bool stop_ok = false;
+        {
+            std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
+            if (to_stm_) {
+                UartTraceContext angle_context;
+                angle_context.source = "auto_workspace_stop";
+                angle_context.thread_tag = "auto_workspace_control_thread";
+                angle_context.has_steering_value = true;
+                angle_context.steering_value = 0;
+                ScopedUartTraceContext angle_scope(angle_context);
+                angle_ok = to_stm_->sendAngleWaitOk(0);
+
+                UartTraceContext stop_context;
+                stop_context.source = "auto_workspace_stop";
+                stop_context.thread_tag = "auto_workspace_control_thread";
+                ScopedUartTraceContext stop_scope(stop_context);
+                stop_ok = to_stm_->sendStopWaitOk();
+            }
+        }
+        (void)angle_ok;
+        (void)stop_ok;
+        auto_avoid_stm32_drive_enabled_.store(false);
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        vehicle_command_state_.has_speed = true;
+        vehicle_command_state_.speed = 0;
+        vehicle_command_state_.has_angle = true;
+        vehicle_command_state_.angle = 0;
+    }
+
+    if (was_running) {
+        log_info(kLogModule, "auto workspace control loop stopped");
+    }
+}
+
+LogDashboardServer::AutoAvoidCommandTrace LogDashboardServer::applyAutoWorkspaceDriveCommand(
+    bool stop_motion,
+    int speed_cm_s,
+    int steering_encoder,
+    const std::string& phase,
+    int& last_speed_cm_s,
+    int& last_steering_encoder,
+    bool& has_last_command,
+    std::chrono::steady_clock::time_point& last_command_sent_steady,
+    std::int64_t control_cycle_id) {
+    AutoAvoidCommandTrace trace;
+    const auto now = std::chrono::steady_clock::now();
+
+    const bool changed =
+        !has_last_command ||
+        std::abs(last_speed_cm_s - speed_cm_s) >= kAutoAvoidSpeedResendThreshold ||
+        std::abs(last_steering_encoder - steering_encoder) >= kAutoAvoidSteeringResendThreshold ||
+        stop_motion;
+    if (!changed && !stop_motion) {
+        trace.result = "skipped_no_change";
+        return trace;
+    }
+
+    const bool steering_only_update =
+        has_last_command &&
+        last_speed_cm_s == speed_cm_s &&
+        last_steering_encoder != steering_encoder;
+    if (!stop_motion &&
+        steering_only_update &&
+        last_command_sent_steady.time_since_epoch().count() > 0 &&
+        (now - last_command_sent_steady) < kAutoAvoidCommandMinInterval) {
+        trace.result = "skipped_rate_limited";
+        return trace;
+    }
+
+    if (stop_motion) {
+        bool angle_ok = false;
+        bool stop_ok = false;
+        {
+            std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
+            if (to_stm_) {
+                UartTraceContext angle_context;
+                angle_context.control_cycle_id = control_cycle_id;
+                angle_context.source = "auto_workspace";
+                angle_context.thread_tag = "auto_workspace_control_thread";
+                angle_context.auto_avoid_state = phase;
+                angle_context.has_steering_value = true;
+                angle_context.steering_value = 0;
+                ScopedUartTraceContext angle_scope(angle_context);
+                trace.sent_angle = true;
+                angle_ok = to_stm_->sendAngleWaitOk(0);
+
+                UartTraceContext stop_context;
+                stop_context.control_cycle_id = control_cycle_id;
+                stop_context.source = "auto_workspace";
+                stop_context.thread_tag = "auto_workspace_control_thread";
+                stop_context.auto_avoid_state = phase;
+                ScopedUartTraceContext stop_scope(stop_context);
+                trace.sent_stop = true;
+                stop_ok = to_stm_->sendStopWaitOk();
+            }
+        }
+
+        if (!stop_ok) {
+            trace.result = "failed_stop";
+            return trace;
+        }
+        auto_avoid_stm32_drive_enabled_.store(false);
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            vehicle_command_state_.has_speed = true;
+            vehicle_command_state_.speed = 0;
+            vehicle_command_state_.has_angle = true;
+            vehicle_command_state_.angle = 0;
+        }
+        last_command_sent_steady = now;
+        last_speed_cm_s = 0;
+        last_steering_encoder = 0;
+        has_last_command = true;
+        trace.success = true;
+        trace.result = angle_ok ? "ok" : "ok_stop_recenter_failed";
+        return trace;
+    }
+
+    bool start_ok = true;
+    bool angle_ok = true;
+    bool speed_ok = true;
+    {
+        std::lock_guard<std::mutex> stm32_lock(stm32_mutex_);
+        if (!to_stm_) {
+            trace.result = "skipped_stm32_not_ready";
+            return trace;
+        }
+
+        if (!auto_avoid_stm32_drive_enabled_.load()) {
+            UartTraceContext start_context;
+            start_context.control_cycle_id = control_cycle_id;
+            start_context.source = "auto_workspace";
+            start_context.thread_tag = "auto_workspace_control_thread";
+            start_context.auto_avoid_state = phase;
+            ScopedUartTraceContext start_scope(start_context);
+            trace.sent_start = true;
+            start_ok = to_stm_->sendStartWaitOk();
+            if (start_ok) {
+                auto_avoid_stm32_drive_enabled_.store(true);
+            }
+        }
+
+        if (start_ok) {
+            UartTraceContext angle_context;
+            angle_context.control_cycle_id = control_cycle_id;
+            angle_context.source = "auto_workspace";
+            angle_context.thread_tag = "auto_workspace_control_thread";
+            angle_context.auto_avoid_state = phase;
+            angle_context.has_speed_value = true;
+            angle_context.speed_value = speed_cm_s;
+            angle_context.has_steering_value = true;
+            angle_context.steering_value = steering_encoder;
+            ScopedUartTraceContext angle_scope(angle_context);
+            trace.sent_angle = true;
+            angle_ok = to_stm_->sendAngleWaitOk(steering_encoder);
+
+            UartTraceContext speed_context = angle_context;
+            ScopedUartTraceContext speed_scope(speed_context);
+            trace.sent_speed = true;
+            speed_ok = to_stm_->sendSpeedWaitOk(speed_cm_s);
+        }
+    }
+
+    if (!start_ok || !angle_ok || !speed_ok) {
+        trace.result =
+            !start_ok ? "failed_start" :
+            (!angle_ok ? "failed_angle" : "failed_speed");
+        return trace;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        vehicle_command_state_.has_speed = true;
+        vehicle_command_state_.speed = speed_cm_s;
+        vehicle_command_state_.has_angle = true;
+        vehicle_command_state_.angle = steering_encoder;
+    }
+    last_command_sent_steady = now;
+    last_speed_cm_s = speed_cm_s;
+    last_steering_encoder = steering_encoder;
+    has_last_command = true;
+    trace.success = true;
+    trace.result = "ok";
+    return trace;
+}
+
+void LogDashboardServer::runAutoWorkspaceControlLoop() {
+    using namespace std::chrono_literals;
+
+    int last_speed_cm_s = 0;
+    int last_steering_encoder = 0;
+    bool has_last_navigation_command = false;
+    AutoAvoidController::Command last_avoidance_command;
+    bool has_last_avoidance_command = false;
+    std::chrono::steady_clock::time_point last_command_sent_steady{};
+    auto next_tick = std::chrono::steady_clock::now();
+    std::int64_t control_cycle_id = 0;
+
+    while (auto_workspace_control_running_.load()) {
+        next_tick += kAutoWorkspaceControlPeriod;
+        ++control_cycle_id;
+
+        std::string active_mode;
+        GpsRuntimeState gps_state;
+        ImuRuntimeState imu_state;
+        AutoWorkspaceLocalFrameState local_frame_state;
+        AutoWorkspacePlanState plan_state;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            active_mode = active_workspace_mode_;
+            gps_state = gps_state_;
+            imu_state = imu_state_;
+            local_frame_state = auto_workspace_local_frame_state_;
+            plan_state = auto_workspace_plan_state_;
+        }
+
+        if (active_mode != "AUTO") {
+            break;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        const bool gps_valid =
+            gps_state.filtered_valid &&
+            gps_state.status >= 0 &&
+            gps_state.message_count > 0 &&
+            (now - gps_state.last_message_steady_) <= kSensorFreshWindow &&
+            std::isfinite(gps_state.latitude) &&
+            std::isfinite(gps_state.longitude);
+        const bool imu_valid =
+            imu_state.has_attitude &&
+            imu_state.message_count > 0 &&
+            (now - imu_state.last_message_steady_) <= kSensorFreshWindow &&
+            std::isfinite(imu_state.yaw_deg);
+        const bool local_frame_valid = local_frame_state.valid;
+
+        double current_x_m = 0.0;
+        double current_y_m = 0.0;
+        if (gps_valid && local_frame_valid) {
+            std::tie(current_x_m, current_y_m) = localPlanarOffsetMeters(
+                local_frame_state.origin_latitude,
+                local_frame_state.origin_longitude,
+                gps_state.latitude,
+                gps_state.longitude);
+        }
+
+        AutoWorkspaceRuntimeState runtime_update;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            runtime_update = auto_workspace_runtime_state_;
+        }
+        runtime_update.plan_ready = plan_state.valid;
+        runtime_update.gps_valid = gps_valid;
+        runtime_update.imu_valid = imu_valid;
+        runtime_update.local_frame_valid = local_frame_valid;
+        runtime_update.last_control_cycle_id = control_cycle_id;
+        runtime_update.current_x_m = current_x_m;
+        runtime_update.current_y_m = current_y_m;
+        runtime_update.destination_x_m = plan_state.destination_x_m;
+        runtime_update.destination_y_m = plan_state.destination_y_m;
+        runtime_update.route_provider = plan_state.route_provider;
+
+        if (!plan_state.valid) {
+            applyAutoWorkspaceDriveCommand(
+                true,
+                0,
+                0,
+                "plan_missing",
+                last_speed_cm_s,
+                last_steering_encoder,
+                has_last_navigation_command,
+                last_command_sent_steady,
+                control_cycle_id);
+            runtime_update.task_running = false;
+            runtime_update.avoidance_active = false;
+            runtime_update.phase = "plan_missing";
+            runtime_update.message = "自动道路路径已失效，请重新规划";
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                auto_workspace_runtime_state_ = runtime_update;
+            }
+            auto_workspace_control_running_.store(false);
+            break;
+        }
+
+        if (!gps_valid || !imu_valid || !local_frame_valid) {
+            applyAutoWorkspaceDriveCommand(
+                true,
+                0,
+                0,
+                "waiting_sensor",
+                last_speed_cm_s,
+                last_steering_encoder,
+                has_last_navigation_command,
+                last_command_sent_steady,
+                control_cycle_id);
+            runtime_update.task_running = true;
+            runtime_update.avoidance_active = false;
+            runtime_update.phase = "waiting_sensor";
+            runtime_update.message =
+                !gps_valid ? "自动任务等待 GPS" :
+                (!imu_valid ? "自动任务等待 IMU" : "自动任务等待 XY 原点");
+            runtime_update.command_speed_cm_s = 0;
+            runtime_update.command_steering_encoder = 0;
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                    auto_workspace_runtime_state_ = runtime_update;
+            }
+            std::this_thread::sleep_until(next_tick);
+            continue;
+        }
+
+        const bool has_route_path = !plan_state.preview_path.empty();
+        const std::size_t nearest_path_index =
+            has_route_path ? nearestPathPointIndex(
+                plan_state.preview_path,
+                current_x_m,
+                current_y_m) : 0;
+        const std::size_t target_path_index =
+            has_route_path ? lookaheadPathPointIndex(
+                plan_state.preview_path,
+                nearest_path_index,
+                current_x_m,
+                current_y_m,
+                kAutoWorkspacePathLookaheadM) : 0;
+        double final_target_x_m = plan_state.destination_x_m;
+        double final_target_y_m = plan_state.destination_y_m;
+        double tracking_target_latitude = plan_state.destination_latitude;
+        double tracking_target_longitude = plan_state.destination_longitude;
+        if (has_route_path) {
+            final_target_x_m = plan_state.preview_path.back().x_m;
+            final_target_y_m = plan_state.preview_path.back().y_m;
+            tracking_target_latitude = plan_state.preview_path[target_path_index].latitude;
+            tracking_target_longitude = plan_state.preview_path[target_path_index].longitude;
+        }
+        const double arrival_distance_m =
+            has_route_path ?
+                std::hypot(final_target_x_m - current_x_m, final_target_y_m - current_y_m) :
+                std::hypot(plan_state.destination_x_m - current_x_m, plan_state.destination_y_m - current_y_m);
+        const double remaining_distance_m =
+            has_route_path ?
+                remainingPathDistanceMeters(
+                    plan_state.preview_path,
+                    nearest_path_index,
+                    current_x_m,
+                    current_y_m) :
+                std::hypot(plan_state.destination_x_m - current_x_m, plan_state.destination_y_m - current_y_m);
+        const double target_bearing_deg = initialBearingDeg(
+            gps_state.latitude,
+            gps_state.longitude,
+            tracking_target_latitude,
+            tracking_target_longitude);
+        const double heading_error_deg =
+            normalizeHeadingDifferenceDeg(target_bearing_deg - imu_state.yaw_deg);
+
+        runtime_update.remaining_distance_m = remaining_distance_m;
+        runtime_update.target_bearing_deg = target_bearing_deg;
+        runtime_update.heading_error_deg = heading_error_deg;
+        runtime_update.active_path_index = target_path_index;
+
+        if (arrival_distance_m <= kAutoWorkspaceArriveDistanceM) {
+            applyAutoWorkspaceDriveCommand(
+                true,
+                0,
+                0,
+                "arrived",
+                last_speed_cm_s,
+                last_steering_encoder,
+                has_last_navigation_command,
+                last_command_sent_steady,
+                control_cycle_id);
+            runtime_update.task_running = false;
+            runtime_update.avoidance_active = false;
+            runtime_update.target_reached = true;
+            runtime_update.active_path_index =
+                has_route_path && !plan_state.preview_path.empty() ?
+                    plan_state.preview_path.size() - 1 :
+                    0;
+            runtime_update.phase = "arrived";
+            runtime_update.message = "已到达目标点，车辆已停止";
+            runtime_update.command_speed_cm_s = 0;
+            runtime_update.command_steering_encoder = 0;
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                auto_workspace_runtime_state_ = runtime_update;
+            }
+            auto_workspace_control_running_.store(false);
+            break;
+        }
+
+        auto snapshot = autoAvoidSensorSnapshot();
+        const bool front_close =
+            snapshot.lidar_valid &&
+            snapshot.front.valid &&
+            std::isfinite(snapshot.front.nearest_m) &&
+            snapshot.front.nearest_m < auto_avoid_controller_.config().avoidance_turn_max_distance_m;
+        const bool avoidance_active =
+            auto_avoid_controller_.currentAvoidanceStage() != AutoAvoidController::AvoidanceStage::Idle ||
+            front_close;
+
+        if (avoidance_active) {
+            has_last_navigation_command = false;
+            const auto command = auto_avoid_controller_.decide(snapshot);
+            const auto command_trace = applyAutoAvoidCommand(
+                command,
+                last_avoidance_command,
+                has_last_avoidance_command,
+                last_command_sent_steady,
+                control_cycle_id);
+            runtime_update.task_running = true;
+            runtime_update.avoidance_active = true;
+            runtime_update.phase = "avoiding";
+            runtime_update.message = "前向近障，自动工作区正在调用避障链";
+            runtime_update.command_speed_cm_s = command.speed_cm_s;
+            runtime_update.command_steering_encoder = command.steering_encoder;
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                auto_workspace_runtime_state_ = runtime_update;
+                auto_avoid_runtime_state_.active = true;
+                auto_avoid_runtime_state_.has_decision = true;
+                auto_avoid_runtime_state_.last_control_cycle_id = control_cycle_id;
+                auto_avoid_runtime_state_.snapshot_valid = snapshot.lidar_valid && snapshot.imu_valid;
+                auto_avoid_runtime_state_.lidar_valid = snapshot.lidar_valid;
+                auto_avoid_runtime_state_.imu_valid = snapshot.imu_valid;
+                auto_avoid_runtime_state_.last_decision = command;
+                auto_avoid_runtime_state_.last_apply_result = command_trace.result;
+            }
+        } else {
+            auto_avoid_controller_.reset();
+            has_last_avoidance_command = false;
+            last_avoidance_command = AutoAvoidController::Command{};
+
+            const int speed_cm_s =
+                remaining_distance_m <= kAutoWorkspaceApproachDistanceM ?
+                    kAutoWorkspaceApproachSpeedCmS :
+                    kAutoWorkspaceCruiseSpeedCmS;
+            const int steering_encoder =
+                autoWorkspaceSteeringEncoderForHeadingError(heading_error_deg);
+            applyAutoWorkspaceDriveCommand(
+                false,
+                speed_cm_s,
+                steering_encoder,
+                "tracking",
+                last_speed_cm_s,
+                last_steering_encoder,
+                has_last_navigation_command,
+                last_command_sent_steady,
+                control_cycle_id);
+            runtime_update.task_running = true;
+            runtime_update.avoidance_active = false;
+            runtime_update.phase = "tracking";
+            runtime_update.message = "自动任务沿道路路径前进中";
+            runtime_update.command_speed_cm_s = speed_cm_s;
+            runtime_update.command_steering_encoder = steering_encoder;
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                auto_workspace_runtime_state_ = runtime_update;
+                auto_avoid_runtime_state_.active = false;
+                auto_avoid_runtime_state_.has_decision = false;
+                auto_avoid_runtime_state_.last_apply_result = "inactive";
+            }
+        }
+
+        std::this_thread::sleep_until(next_tick);
+        if (std::chrono::steady_clock::now() > next_tick + 200ms) {
+            next_tick = std::chrono::steady_clock::now();
+        }
+    }
+}
+
 void LogDashboardServer::startStm32Bridge() {
     std::lock_guard<std::mutex> lock(stm32_mutex_);
     if (to_stm_) {
@@ -2606,111 +4098,131 @@ void LogDashboardServer::stopRuntimeLogBridge() {
 
 void LogDashboardServer::onDepthImage(const sensor_msgs::msg::Image::SharedPtr msg) {
     const auto now = std::chrono::steady_clock::now();
-    {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        depth_state_.message_count += 1;
-        depth_state_.last_message_steady_ = now;
-    }
-
-    bool valid = false;
-    bool obstacle_detected = false;
-    double nearest_m = kDepthNoObstacleDistanceMeters;
-    std::string nearest_zone;
-    double obstacle_ratio = 0.0;
-    int valid_pixels = 0;
-    int obstacle_pixels = 0;
-    std::vector<std::pair<double, int>> depth_candidates;
-    if (msg && msg->width > 0 && msg->height > 0 && msg->step > 0) {
-        const int width = static_cast<int>(msg->width);
-        const int height = static_cast<int>(msg->height);
-        const int x_start = std::clamp(static_cast<int>(width * kDepthRoiLeftRatio), 0, width);
-        const int x_end = std::clamp(static_cast<int>(width * kDepthRoiRightRatio), 0, width);
-        const int y_start = std::clamp(static_cast<int>(height * kDepthRoiTopRatio), 0, height);
-        const int y_end = std::clamp(static_cast<int>(height * kDepthRoiBottomRatio), 0, height);
-        const int roi_pixels = std::max(1, (x_end - x_start) * (y_end - y_start));
-        depth_candidates.reserve(static_cast<std::size_t>(roi_pixels));
-
-        const bool depth16 =
-            msg->encoding == "16UC1" || msg->encoding == "mono16" || msg->encoding == "Y11";
-        const bool depth32 = msg->encoding == "32FC1";
-
-        if (depth16 || depth32) {
-            for (int y = y_start; y < y_end; ++y) {
-                for (int x = x_start; x < x_end; ++x) {
-                    double depth_m = 0.0;
-                    const std::size_t byte_offset =
-                        static_cast<std::size_t>(y) * msg->step +
-                        static_cast<std::size_t>(x) * (depth32 ? sizeof(float) : sizeof(std::uint16_t));
-                    if (depth16) {
-                        if (!readDepth16Meters(*msg, byte_offset, depth_m)) {
-                            continue;
-                        }
-                    } else {
-                        if (byte_offset + sizeof(float) > msg->data.size()) {
-                            continue;
-                        }
-                        float raw = 0.0f;
-                        std::memcpy(&raw, msg->data.data() + byte_offset, sizeof(raw));
-                        depth_m = static_cast<double>(raw);
-                    }
-
-                    if (!std::isfinite(depth_m) || depth_m < kDepthMinValidMeters) {
-                        continue;
-                    }
-                    if (depth_m <= kDepthMinValidMeters + kDepthNoDataFloorEpsilonMeters) {
-                        continue;
-                    }
-
-                    ++valid_pixels;
-                    depth_candidates.emplace_back(depth_m, x);
-                    if (depth_m <= kDepthObstacleMaxMeters) {
-                        ++obstacle_pixels;
-                    }
-                }
-            }
-
-            valid = valid_pixels > 0;
-            obstacle_ratio = static_cast<double>(obstacle_pixels) / static_cast<double>(roi_pixels);
-            obstacle_detected = obstacle_pixels >= kDepthMinObstaclePixels;
-            if (!depth_candidates.empty()) {
-                const auto percentile_index = std::min(
-                    depth_candidates.size() - 1,
-                    static_cast<std::size_t>(
-                        static_cast<double>(depth_candidates.size() - 1) * kDepthNearestPercentile));
-                auto percentile_iter = depth_candidates.begin() + static_cast<std::ptrdiff_t>(percentile_index);
-                std::nth_element(
-                    depth_candidates.begin(),
-                    percentile_iter,
-                    depth_candidates.end(),
-                    [](const auto& lhs, const auto& rhs) {
-                        return lhs.first < rhs.first;
-                    });
-                nearest_m = percentile_iter->first;
-                nearest_zone = depthZoneNameForX(percentile_iter->second, width);
-                if (nearest_m <= kDepthNoDataClusterMaxMeters) {
-                    valid = false;
-                    obstacle_detected = false;
-                    nearest_m = kDepthNoObstacleDistanceMeters;
-                    nearest_zone.clear();
-                    valid_pixels = 0;
-                    obstacle_pixels = 0;
-                    obstacle_ratio = 0.0;
-                }
-            } else {
-                nearest_m = kDepthNoObstacleDistanceMeters;
-                nearest_zone.clear();
-            }
-        }
+    if (!msg) {
+        return;
     }
 
     std::lock_guard<std::mutex> lock(state_mutex_);
-    depth_state_.valid = valid;
-    depth_state_.obstacle_detected = obstacle_detected;
-    depth_state_.nearest_m = nearest_m;
-    depth_state_.nearest_zone = nearest_zone;
-    depth_state_.obstacle_ratio = obstacle_ratio;
-    depth_state_.valid_pixels = valid_pixels;
-    depth_state_.obstacle_pixels = obstacle_pixels;
+    depth_state_.message_count += 1;
+    depth_state_.last_message_steady_ = now;
+}
+
+void LogDashboardServer::resetLidarDisplayFilterLocked() {
+    lidar_display_filter_state_ = LidarDisplayFilterState{};
+}
+
+LogDashboardServer::LidarRuntimeState::SectorRuntimeState
+LogDashboardServer::filteredLidarDisplaySectorLocked(
+    const LidarRuntimeState::SectorRuntimeState& sample,
+    std::deque<LidarRuntimeState::SectorRuntimeState>& history) const {
+    const bool sample_valid =
+        sample.valid &&
+        std::isfinite(sample.nearest_m) &&
+        std::isfinite(sample.nearest_angle_deg);
+    if (!sample_valid) {
+        history.clear();
+        return sample;
+    }
+
+    history.push_back(sample);
+    const int filter_window = std::max(1, auto_avoid_controller_.config().lidar_filter_window);
+    while (static_cast<int>(history.size()) > filter_window) {
+        history.pop_front();
+    }
+
+    std::vector<LidarRuntimeState::SectorRuntimeState> ordered(history.begin(), history.end());
+    std::sort(
+        ordered.begin(),
+        ordered.end(),
+        [](const auto& lhs, const auto& rhs) {
+            return lhs.nearest_m < rhs.nearest_m;
+        });
+    return ordered[ordered.size() / 2];
+}
+
+LogDashboardServer::LidarRuntimeState::SectorRuntimeState
+LogDashboardServer::filterLidarDisplayFrontLocked(
+    const LidarRuntimeState::SectorRuntimeState& front,
+    const LidarRuntimeState::SectorRuntimeState& negative_front,
+    const LidarRuntimeState::SectorRuntimeState& positive_front) {
+    auto& filter_state = lidar_display_filter_state_;
+    const auto filtered_negative_front = filteredLidarDisplaySectorLocked(
+        negative_front,
+        filter_state.negative_front_history);
+    const auto filtered_positive_front = filteredLidarDisplaySectorLocked(
+        positive_front,
+        filter_state.positive_front_history);
+    auto filtered_front = filteredLidarDisplaySectorLocked(
+        front,
+        filter_state.front_history);
+
+    if (!filtered_front.valid ||
+        !std::isfinite(filtered_front.nearest_m) ||
+        !std::isfinite(filtered_front.nearest_angle_deg)) {
+        filter_state.has_last_stable_front = false;
+        filter_state.last_stable_front = LidarRuntimeState::SectorRuntimeState{};
+        filter_state.has_pending_front_spike = false;
+        filter_state.pending_front_spike = LidarRuntimeState::SectorRuntimeState{};
+        filter_state.pending_front_spike_ticks = 0;
+        return filtered_front;
+    }
+
+    const auto& config = auto_avoid_controller_.config();
+    const bool side_clear =
+        (!filtered_negative_front.valid ||
+            !std::isfinite(filtered_negative_front.nearest_m) ||
+            filtered_negative_front.nearest_m >= config.front_spike_side_clear_distance_m) &&
+        (!filtered_positive_front.valid ||
+            !std::isfinite(filtered_positive_front.nearest_m) ||
+            filtered_positive_front.nearest_m >= config.front_spike_side_clear_distance_m);
+    const bool suspicious_center_spike =
+        filter_state.has_last_stable_front &&
+        std::isfinite(filter_state.last_stable_front.nearest_m) &&
+        filter_state.last_stable_front.nearest_m > config.avoidance_turn_max_distance_m &&
+        std::abs(filtered_front.nearest_angle_deg) <= config.front_spike_center_half_width_deg &&
+        filtered_front.nearest_m + config.front_spike_jump_distance_m <
+            filter_state.last_stable_front.nearest_m &&
+        filtered_front.support_points > 0 &&
+        filtered_front.support_points <= config.front_spike_max_support_points &&
+        side_clear;
+
+    if (suspicious_center_spike) {
+        const int confirm_ticks =
+            filtered_front.nearest_m <= config.emergency_stop_distance_m ?
+                1 :
+                std::max(1, config.front_spike_confirm_ticks);
+        const bool similar_pending_spike =
+            filter_state.has_pending_front_spike &&
+            std::isfinite(filter_state.pending_front_spike.nearest_m) &&
+            std::isfinite(filter_state.pending_front_spike.nearest_angle_deg) &&
+            std::abs(filtered_front.nearest_m - filter_state.pending_front_spike.nearest_m) <=
+                0.30 &&
+            std::abs(
+                filtered_front.nearest_angle_deg -
+                filter_state.pending_front_spike.nearest_angle_deg) <= 8.0;
+        if (!similar_pending_spike) {
+            filter_state.pending_front_spike = filtered_front;
+            filter_state.has_pending_front_spike = true;
+            filter_state.pending_front_spike_ticks = 1;
+        } else {
+            ++filter_state.pending_front_spike_ticks;
+        }
+
+        if (filter_state.pending_front_spike_ticks < confirm_ticks) {
+            return filter_state.last_stable_front;
+        }
+    } else {
+        filter_state.has_pending_front_spike = false;
+        filter_state.pending_front_spike = LidarRuntimeState::SectorRuntimeState{};
+        filter_state.pending_front_spike_ticks = 0;
+    }
+
+    filter_state.has_last_stable_front = true;
+    filter_state.last_stable_front = filtered_front;
+    filter_state.has_pending_front_spike = false;
+    filter_state.pending_front_spike = LidarRuntimeState::SectorRuntimeState{};
+    filter_state.pending_front_spike_ticks = 0;
+    return filtered_front;
 }
 
 void LogDashboardServer::onLidarScan(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
@@ -2725,9 +4237,6 @@ void LogDashboardServer::onLidarScan(const sensor_msgs::msg::LaserScan::SharedPt
     lidar_state_.message_count += 1;
     lidar_state_.last_message_steady_ = now;
     lidar_state_.valid = lidar_input_frame.valid;
-    lidar_state_.obstacle_detected = lidar_input_frame.obstacle_detected;
-    lidar_state_.nearest_m = lidar_input_frame.nearest_m;
-    lidar_state_.nearest_angle_deg = lidar_input_frame.nearest_angle_deg;
     lidar_state_.valid_points = lidar_input_frame.valid_points;
     lidar_state_.negative_front_sector = lidar_input_frame.negative_front_sector;
     lidar_state_.front_sector = lidar_input_frame.front_sector;
@@ -2736,6 +4245,22 @@ void LogDashboardServer::onLidarScan(const sensor_msgs::msg::LaserScan::SharedPt
     lidar_state_.avoidance_buffer_sector = lidar_input_frame.avoidance_buffer_sector;
     lidar_state_.front_target_selection = lidar_input_frame.front_target_selection;
     lidar_state_.front_nearest_zone = lidar_input_frame.front_nearest_zone;
+    if (lidar_input_frame.valid) {
+        lidar_state_.filtered_auto_avoid_front_sector = filterLidarDisplayFrontLocked(
+            lidar_input_frame.auto_avoid_front_sector,
+            lidar_input_frame.negative_front_sector,
+            lidar_input_frame.positive_front_sector);
+        lidar_state_.filtered_front_nearest_zone =
+            lidar_state_.filtered_auto_avoid_front_sector.valid ?
+                AutoAvoidInputBuilder::frontNearestZoneFromAngle(
+                    lidar_state_.filtered_auto_avoid_front_sector.nearest_angle_deg,
+                    lidar_input_frame.front_nearest_zone) :
+                lidar_input_frame.front_nearest_zone;
+    } else {
+        resetLidarDisplayFilterLocked();
+        lidar_state_.filtered_auto_avoid_front_sector = lidar_input_frame.auto_avoid_front_sector;
+        lidar_state_.filtered_front_nearest_zone = lidar_input_frame.front_nearest_zone;
+    }
 }
 
 void LogDashboardServer::onImu(const sensor_msgs::msg::Imu::SharedPtr msg) {
@@ -2794,27 +4319,197 @@ void LogDashboardServer::onImu(const sensor_msgs::msg::Imu::SharedPtr msg) {
     imu_state_.has_attitude = has_attitude;
 }
 
-void LogDashboardServer::onGpsFix(const sensor_msgs::msg::NavSatFix::SharedPtr msg) {
-    const auto now = std::chrono::steady_clock::now();
-    {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        gps_state_.message_count += 1;
-        gps_state_.last_message_steady_ = now;
-        gps_state_.status = msg ? msg->status.status : -1;
+void LogDashboardServer::resetGpsFilterLocked() {
+    gps_filter_state_ = GpsFilterState {};
+    gps_state_.filtered_valid = false;
+    gps_state_.origin_stable = false;
+    gps_state_.origin_stability_radius_m = 0.0;
+    gps_state_.origin_stability_samples = 0;
+}
+
+void LogDashboardServer::updateFilteredGpsLocked(
+    double latitude,
+    double longitude,
+    double altitude,
+    double horizontal_stddev_m) {
+    if (!gps_filter_state_.anchor_valid) {
+        gps_filter_state_.anchor_valid = true;
+        gps_filter_state_.anchor_latitude = latitude;
+        gps_filter_state_.anchor_longitude = longitude;
     }
 
+    const auto [raw_x_m, raw_y_m] = localPlanarOffsetMeters(
+        gps_filter_state_.anchor_latitude,
+        gps_filter_state_.anchor_longitude,
+        latitude,
+        longitude);
+
+    GpsFilterSample raw_sample;
+    raw_sample.x_m = raw_x_m;
+    raw_sample.y_m = raw_y_m;
+    raw_sample.altitude_m = altitude;
+    raw_sample.horizontal_stddev_m = horizontal_stddev_m;
+    gps_filter_state_.raw_window.push_back(raw_sample);
+    while (gps_filter_state_.raw_window.size() > kGpsMedianWindowSize) {
+        gps_filter_state_.raw_window.pop_front();
+    }
+
+    std::vector<double> recent_x_m;
+    std::vector<double> recent_y_m;
+    std::vector<double> recent_altitude_m;
+    std::vector<double> recent_horizontal_stddev_m;
+    recent_x_m.reserve(gps_filter_state_.raw_window.size());
+    recent_y_m.reserve(gps_filter_state_.raw_window.size());
+    recent_altitude_m.reserve(gps_filter_state_.raw_window.size());
+    recent_horizontal_stddev_m.reserve(gps_filter_state_.raw_window.size());
+    for (const auto& sample : gps_filter_state_.raw_window) {
+        recent_x_m.push_back(sample.x_m);
+        recent_y_m.push_back(sample.y_m);
+        recent_altitude_m.push_back(sample.altitude_m);
+        if (std::isfinite(sample.horizontal_stddev_m) && sample.horizontal_stddev_m > 0.0) {
+            recent_horizontal_stddev_m.push_back(sample.horizontal_stddev_m);
+        }
+    }
+
+    const double median_x_m = medianValue(recent_x_m);
+    const double median_y_m = medianValue(recent_y_m);
+    const double median_altitude_m = medianValue(recent_altitude_m);
+    const double filtered_horizontal_stddev_m =
+        recent_horizontal_stddev_m.empty() ?
+            horizontal_stddev_m :
+            medianValue(recent_horizontal_stddev_m);
+
+    if (!gps_filter_state_.filtered_valid) {
+        gps_filter_state_.filtered_x_m = median_x_m;
+        gps_filter_state_.filtered_y_m = median_y_m;
+        gps_filter_state_.filtered_altitude_m = median_altitude_m;
+        gps_filter_state_.filtered_valid = true;
+    } else {
+        gps_filter_state_.filtered_x_m +=
+            (median_x_m - gps_filter_state_.filtered_x_m) * kGpsFilterEmaAlpha;
+        gps_filter_state_.filtered_y_m +=
+            (median_y_m - gps_filter_state_.filtered_y_m) * kGpsFilterEmaAlpha;
+        gps_filter_state_.filtered_altitude_m +=
+            (median_altitude_m - gps_filter_state_.filtered_altitude_m) * kGpsFilterEmaAlpha;
+    }
+
+    GpsFilterSample filtered_sample;
+    filtered_sample.x_m = gps_filter_state_.filtered_x_m;
+    filtered_sample.y_m = gps_filter_state_.filtered_y_m;
+    filtered_sample.altitude_m = gps_filter_state_.filtered_altitude_m;
+    filtered_sample.horizontal_stddev_m = filtered_horizontal_stddev_m;
+    gps_filter_state_.filtered_window.push_back(filtered_sample);
+    while (gps_filter_state_.filtered_window.size() > kGpsOriginStabilityWindowSize) {
+        gps_filter_state_.filtered_window.pop_front();
+    }
+
+    const auto [filtered_latitude, filtered_longitude] = latLonFromLocalPlanarOffsetMeters(
+        gps_filter_state_.anchor_latitude,
+        gps_filter_state_.anchor_longitude,
+        gps_filter_state_.filtered_x_m,
+        gps_filter_state_.filtered_y_m);
+
+    gps_state_.filtered_valid = true;
+    gps_state_.latitude = filtered_latitude;
+    gps_state_.longitude = filtered_longitude;
+    gps_state_.altitude = gps_filter_state_.filtered_altitude_m;
+    gps_state_.horizontal_stddev_m = filtered_horizontal_stddev_m;
+
+    double centroid_x_m = 0.0;
+    double centroid_y_m = 0.0;
+    double centroid_altitude_m = 0.0;
+    double cluster_radius_m = 0.0;
+    double mean_horizontal_stddev_m = 0.0;
+    std::size_t accuracy_sample_count = 0;
+    for (const auto& sample : gps_filter_state_.filtered_window) {
+        centroid_x_m += sample.x_m;
+        centroid_y_m += sample.y_m;
+        centroid_altitude_m += sample.altitude_m;
+        if (std::isfinite(sample.horizontal_stddev_m) && sample.horizontal_stddev_m > 0.0) {
+            mean_horizontal_stddev_m += sample.horizontal_stddev_m;
+            ++accuracy_sample_count;
+        }
+    }
+    if (!gps_filter_state_.filtered_window.empty()) {
+        centroid_x_m /= static_cast<double>(gps_filter_state_.filtered_window.size());
+        centroid_y_m /= static_cast<double>(gps_filter_state_.filtered_window.size());
+        centroid_altitude_m /= static_cast<double>(gps_filter_state_.filtered_window.size());
+        for (const auto& sample : gps_filter_state_.filtered_window) {
+            cluster_radius_m = std::max(
+                cluster_radius_m,
+                std::hypot(sample.x_m - centroid_x_m, sample.y_m - centroid_y_m));
+        }
+    }
+    if (accuracy_sample_count > 0) {
+        mean_horizontal_stddev_m /= static_cast<double>(accuracy_sample_count);
+    }
+
+    gps_state_.origin_stability_radius_m = cluster_radius_m;
+    gps_state_.origin_stability_samples = gps_filter_state_.filtered_window.size();
+
+    const bool enough_samples =
+        gps_filter_state_.filtered_window.size() >= kGpsOriginStabilityWindowSize;
+    const bool accuracy_ok =
+        accuracy_sample_count == 0 ||
+        mean_horizontal_stddev_m <= kGpsOriginStableHorizontalStdDevM;
+    const bool origin_stable =
+        enough_samples &&
+        accuracy_ok &&
+        cluster_radius_m <= kGpsOriginStableRadiusM;
+    gps_state_.origin_stable = origin_stable;
+
+    if (origin_stable && !auto_workspace_local_frame_state_.valid) {
+        const auto [origin_latitude, origin_longitude] = latLonFromLocalPlanarOffsetMeters(
+            gps_filter_state_.anchor_latitude,
+            gps_filter_state_.anchor_longitude,
+            centroid_x_m,
+            centroid_y_m);
+        auto_workspace_local_frame_state_.valid = true;
+        auto_workspace_local_frame_state_.origin_latitude = origin_latitude;
+        auto_workspace_local_frame_state_.origin_longitude = origin_longitude;
+        auto_workspace_local_frame_state_.origin_altitude = centroid_altitude_m;
+    }
+}
+
+void LogDashboardServer::onGpsFix(const sensor_msgs::msg::NavSatFix::SharedPtr msg) {
+    const auto now = std::chrono::steady_clock::now();
+    const int status = msg ? msg->status.status : -1;
     const bool has_position =
         msg &&
         std::isfinite(msg->latitude) &&
         std::isfinite(msg->longitude);
-
+    const bool valid_fix_position = has_position && status >= 0;
     std::lock_guard<std::mutex> lock(state_mutex_);
+    gps_state_.message_count += 1;
+    gps_state_.last_message_steady_ = now;
+    gps_state_.status = status;
     gps_state_.has_position = has_position;
     if (has_position) {
-        gps_state_.latitude = msg->latitude;
-        gps_state_.longitude = msg->longitude;
-        gps_state_.altitude = std::isfinite(msg->altitude) ? msg->altitude : 0.0;
+        gps_state_.raw_latitude = msg->latitude;
+        gps_state_.raw_longitude = msg->longitude;
+        gps_state_.raw_altitude = std::isfinite(msg->altitude) ? msg->altitude : 0.0;
     }
+
+    if (!valid_fix_position) {
+        resetGpsFilterLocked();
+        return;
+    }
+
+    double horizontal_stddev_m = std::numeric_limits<double>::quiet_NaN();
+    if (msg->position_covariance_type != sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN) {
+        const double east_cov = msg->position_covariance[0];
+        const double north_cov = msg->position_covariance[4];
+        if (std::isfinite(east_cov) && east_cov >= 0.0 &&
+            std::isfinite(north_cov) && north_cov >= 0.0) {
+            horizontal_stddev_m = std::sqrt(std::max(east_cov, north_cov));
+        }
+    }
+
+    updateFilteredGpsLocked(
+        msg->latitude,
+        msg->longitude,
+        std::isfinite(msg->altitude) ? msg->altitude : 0.0,
+        horizontal_stddev_m);
 }
 
 void LogDashboardServer::onRgbYolo(const std_msgs::msg::String::SharedPtr msg) {
@@ -2845,6 +4540,9 @@ std::string LogDashboardServer::stateJson() const {
     bool avoidance_start_ack_pending = false;
     VehicleCommandState vehicle_command_state;
     AutoAvoidRuntimeState auto_avoid_runtime_state;
+    AutoWorkspacePlanState auto_workspace_plan_state;
+    AutoWorkspaceRuntimeState auto_workspace_runtime_state;
+    AutoWorkspaceLocalFrameState auto_workspace_local_frame_state;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         depth_state = depth_state_;
@@ -2858,6 +4556,9 @@ std::string LogDashboardServer::stateJson() const {
         avoidance_start_ack_pending = avoidance_start_ack_pending_;
         vehicle_command_state = vehicle_command_state_;
         auto_avoid_runtime_state = auto_avoid_runtime_state_;
+        auto_workspace_plan_state = auto_workspace_plan_state_;
+        auto_workspace_runtime_state = auto_workspace_runtime_state_;
+        auto_workspace_local_frame_state = auto_workspace_local_frame_state_;
     }
 
     const auto classifyTopicState =
@@ -2883,6 +4584,12 @@ std::string LogDashboardServer::stateJson() const {
         }
         if (gps_state.message_count > 0 &&
             (now_steady - gps_state.last_message_steady_) <= kSensorFreshWindow) {
+            if (gps_state.status >= 0 && gps_state.filtered_valid) {
+                if (auto_workspace_local_frame_state.valid) {
+                    return deviceStateJson("started", "已启动 / FIX 稳定");
+                }
+                return deviceStateJson("started", "已启动 / FIX 收敛中");
+            }
             if (gps_state.status >= 0) {
                 return deviceStateJson("started", "已启动 / FIX");
             }
@@ -2947,6 +4654,18 @@ std::string LogDashboardServer::stateJson() const {
             }
             return deviceStateJson("started", "已启动 / 避障工作区待命");
         }
+        if (active_workspace_mode == "AUTO") {
+            if (auto_workspace_runtime_state.awaiting_start_ack) {
+                return deviceStateJson("started", "已启动 / 等待自动 start ACK");
+            }
+            if (auto_workspace_runtime_state.task_running || auto_workspace_control_running_.load()) {
+                return deviceStateJson("started", "已启动 / 自动工作区控制中");
+            }
+            if (auto_workspace_plan_state.valid) {
+                return deviceStateJson("started", "已启动 / 自动道路路径已规划");
+            }
+            return deviceStateJson("started", "已启动 / 自动工作区待命");
+        }
         if (active_workspace_mode == "MANUAL") {
             if (manual_workspace_working) {
                 return deviceStateJson("started", "已启动 / 手动工作区控制中");
@@ -2958,7 +4677,8 @@ std::string LogDashboardServer::stateJson() const {
 
     const bool gps_key_valid =
         stack_process.running &&
-        gps_state.has_position &&
+        gps_state.filtered_valid &&
+        gps_state.status >= 0 &&
         gps_state.message_count > 0 &&
         (now_steady - gps_state.last_message_steady_) <= kSensorFreshWindow;
     const bool imu_key_valid =
@@ -2966,29 +4686,36 @@ std::string LogDashboardServer::stateJson() const {
         imu_state.has_attitude &&
         imu_state.message_count > 0 &&
         (now_steady - imu_state.last_message_steady_) <= kSensorFreshWindow;
-    const bool depth_stream_fresh =
-        stack_process.running &&
-        depth_state.message_count > 0 &&
-        (now_steady - depth_state.last_message_steady_) <= kSensorFreshWindow;
-    const bool depth_key_valid = depth_stream_fresh;
-    const bool lidar_key_valid =
-        stack_process.running &&
-        lidar_state.valid &&
-        lidar_state.valid_points > 0 &&
-        lidar_state.message_count > 0 &&
-        (now_steady - lidar_state.last_message_steady_) <= kSensorFreshWindow;
-    const bool nearest_valid =
-        lidar_key_valid && lidar_state.auto_avoid_front_sector.valid &&
-        std::isfinite(lidar_state.auto_avoid_front_sector.nearest_m);
-    const std::string nearest_source = "避障区雷达";
-    const std::string nearest_zone =
-        nearest_valid ? lidar_state.front_nearest_zone : std::string();
-    const double nearest_distance_m =
-        nearest_valid ? lidar_state.auto_avoid_front_sector.nearest_m : 0.0;
-    const double nearest_angle_deg =
-        nearest_valid ? lidar_state.auto_avoid_front_sector.nearest_angle_deg : 0.0;
-    const bool nearest_has_angle =
-        nearest_valid && std::isfinite(lidar_state.auto_avoid_front_sector.nearest_angle_deg);
+    const bool auto_workspace_origin_valid = auto_workspace_local_frame_state.valid;
+    const bool auto_workspace_local_valid = gps_key_valid && auto_workspace_origin_valid;
+    double auto_workspace_current_x_m = auto_workspace_runtime_state.current_x_m;
+    double auto_workspace_current_y_m = auto_workspace_runtime_state.current_y_m;
+    if (auto_workspace_local_valid) {
+        std::tie(auto_workspace_current_x_m, auto_workspace_current_y_m) =
+            localPlanarOffsetMeters(
+                auto_workspace_local_frame_state.origin_latitude,
+                auto_workspace_local_frame_state.origin_longitude,
+                gps_state.latitude,
+                gps_state.longitude);
+    }
+    const auto auto_workspace_path_json = [&]() {
+        std::ostringstream path_out;
+        path_out << "[";
+        for (std::size_t index = 0; index < auto_workspace_plan_state.preview_path.size(); ++index) {
+            const auto& point = auto_workspace_plan_state.preview_path[index];
+            if (index > 0) {
+                path_out << ",";
+            }
+            path_out << "{"
+                     << "\"latitude\":" << numberJson(point.latitude, 7) << ","
+                     << "\"longitude\":" << numberJson(point.longitude, 7) << ","
+                     << "\"x_m\":" << numberJson(point.x_m, 3) << ","
+                     << "\"y_m\":" << numberJson(point.y_m, 3)
+                     << "}";
+        }
+        path_out << "]";
+        return path_out.str();
+    };
 
     std::ostringstream out;
     out << "{"
@@ -3010,7 +4737,17 @@ std::string LogDashboardServer::stateJson() const {
         << "\"fix\":" << boolJson(gps_key_valid && gps_state.status >= 0) << ","
         << "\"latitude\":" << (gps_key_valid ? numberJson(gps_state.latitude, 7) : "null") << ","
         << "\"longitude\":" << (gps_key_valid ? numberJson(gps_state.longitude, 7) : "null") << ","
-        << "\"altitude_m\":" << (gps_key_valid ? numberJson(gps_state.altitude, 2) : "null")
+        << "\"altitude_m\":" << (gps_key_valid ? numberJson(gps_state.altitude, 2) : "null") << ","
+        << "\"raw_latitude\":" << (gps_state.has_position ? numberJson(gps_state.raw_latitude, 7) : "null") << ","
+        << "\"raw_longitude\":" << (gps_state.has_position ? numberJson(gps_state.raw_longitude, 7) : "null") << ","
+        << "\"raw_altitude_m\":" << (gps_state.has_position ? numberJson(gps_state.raw_altitude, 2) : "null") << ","
+        << "\"horizontal_stddev_m\":" <<
+            (gps_key_valid && std::isfinite(gps_state.horizontal_stddev_m) ?
+                numberJson(gps_state.horizontal_stddev_m, 2) :
+                "null") << ","
+        << "\"origin_lock_ready\":" << boolJson(gps_state.origin_stable) << ","
+        << "\"origin_lock_radius_m\":" << numberJson(gps_state.origin_stability_radius_m, 3) << ","
+        << "\"origin_lock_samples\":" << gps_state.origin_stability_samples
         << "},"
         << "\"imu\":{"
         << "\"valid\":" << boolJson(imu_key_valid) << ","
@@ -3018,54 +4755,11 @@ std::string LogDashboardServer::stateJson() const {
         << "\"pitch_deg\":" << (imu_key_valid ? numberJson(imu_state.pitch_deg, 1) : "null") << ","
         << "\"yaw_deg\":" << (imu_key_valid ? numberJson(imu_state.yaw_deg, 1) : "null")
         << "},"
-        << "\"depth\":{"
-        << "\"valid\":" << boolJson(depth_key_valid) << ","
-        << "\"nearest_m\":" << (depth_key_valid ? numberJson(depth_state.nearest_m, 2) : "null") << ","
-        << "\"nearest_zone\":\"" << jsonEscape(depth_key_valid ? depth_state.nearest_zone : std::string()) << "\","
-        << "\"obstacle_ratio\":" << (depth_state.valid ? numberJson(depth_state.obstacle_ratio, 3) : "null") << ","
-        << "\"valid_pixels\":" << depth_state.valid_pixels << ","
-        << "\"obstacle_pixels\":" << depth_state.obstacle_pixels << ","
-        << "\"obstacle_detected\":" << boolJson(depth_key_valid && depth_state.obstacle_detected)
-        << "},"
-        << "\"lidar\":{"
-        << "\"valid\":" << boolJson(lidar_key_valid) << ","
-        << "\"nearest_m\":" << (lidar_key_valid ? numberJson(lidar_state.nearest_m, 2) : "null") << ","
-        << "\"nearest_angle_deg\":" << (lidar_key_valid ? numberJson(lidar_state.nearest_angle_deg, 1) : "null") << ","
-        << "\"valid_points\":" << lidar_state.valid_points << ","
-        << "\"obstacle_detected\":" << boolJson(lidar_key_valid && lidar_state.obstacle_detected) << ","
-        << "\"sectors\":{"
-        << "\"negative_front\":{"
-        << "\"valid\":" << boolJson(lidar_key_valid && lidar_state.negative_front_sector.valid) << ","
-        << "\"nearest_m\":" << (lidar_key_valid && lidar_state.negative_front_sector.valid ? numberJson(lidar_state.negative_front_sector.nearest_m, 2) : "null") << ","
-        << "\"nearest_angle_deg\":" << (lidar_key_valid && lidar_state.negative_front_sector.valid ? numberJson(lidar_state.negative_front_sector.nearest_angle_deg, 1) : "null") << ","
-        << "\"valid_points\":" << lidar_state.negative_front_sector.valid_points
-        << "},"
-        << "\"front\":{"
-        << "\"valid\":" << boolJson(lidar_key_valid && lidar_state.front_sector.valid) << ","
-        << "\"nearest_m\":" << (lidar_key_valid && lidar_state.front_sector.valid ? numberJson(lidar_state.front_sector.nearest_m, 2) : "null") << ","
-        << "\"nearest_angle_deg\":" << (lidar_key_valid && lidar_state.front_sector.valid ? numberJson(lidar_state.front_sector.nearest_angle_deg, 1) : "null") << ","
-        << "\"valid_points\":" << lidar_state.front_sector.valid_points
-        << "},"
-        << "\"positive_front\":{"
-        << "\"valid\":" << boolJson(lidar_key_valid && lidar_state.positive_front_sector.valid) << ","
-        << "\"nearest_m\":" << (lidar_key_valid && lidar_state.positive_front_sector.valid ? numberJson(lidar_state.positive_front_sector.nearest_m, 2) : "null") << ","
-        << "\"nearest_angle_deg\":" << (lidar_key_valid && lidar_state.positive_front_sector.valid ? numberJson(lidar_state.positive_front_sector.nearest_angle_deg, 1) : "null") << ","
-        << "\"valid_points\":" << lidar_state.positive_front_sector.valid_points
-        << "}"
-        << "}"
-        << "},"
         << "\"vehicle\":{"
         << "\"speed_valid\":" << boolJson(vehicle_command_state.has_speed) << ","
         << "\"speed\":" << (vehicle_command_state.has_speed ? std::to_string(vehicle_command_state.speed) : "null") << ","
         << "\"angle_valid\":" << boolJson(vehicle_command_state.has_angle) << ","
         << "\"angle\":" << (vehicle_command_state.has_angle ? std::to_string(vehicle_command_state.angle) : "null")
-        << "},"
-        << "\"nearest_obstacle\":{"
-        << "\"valid\":" << boolJson(nearest_valid) << ","
-        << "\"source\":\"" << jsonEscape(nearest_source) << "\","
-        << "\"zone\":\"" << jsonEscape(nearest_zone) << "\","
-        << "\"distance_m\":" << (nearest_valid ? numberJson(nearest_distance_m, 2) : "null") << ","
-        << "\"angle_deg\":" << (nearest_valid && nearest_has_angle ? numberJson(nearest_angle_deg, 1) : "null")
         << "},"
         << "\"auto_avoid\":{"
         << "\"active\":" << boolJson(auto_avoid_runtime_state.active) << ","
@@ -3416,6 +5110,53 @@ std::string LogDashboardServer::stateJson() const {
                     auto_avoid_runtime_state.last_decision.debug.target_yaw_clear_reason)) << "\","
         << "\"debug_text\":\"" << jsonEscape(
                 auto_avoid_runtime_state.last_decision.debug_text) << "\""
+        << "},"
+        << "\"auto_workspace\":{"
+        << "\"plan_ready\":" << boolJson(auto_workspace_plan_state.valid) << ","
+        << "\"awaiting_start_ack\":" << boolJson(auto_workspace_runtime_state.awaiting_start_ack) << ","
+        << "\"task_running\":" << boolJson(auto_workspace_runtime_state.task_running) << ","
+        << "\"gps_valid\":" << boolJson(gps_key_valid) << ","
+        << "\"imu_valid\":" << boolJson(imu_key_valid) << ","
+        << "\"local_frame_valid\":" << boolJson(auto_workspace_local_valid) << ","
+        << "\"origin_valid\":" << boolJson(auto_workspace_origin_valid) << ","
+        << "\"avoidance_active\":" << boolJson(auto_workspace_runtime_state.avoidance_active) << ","
+        << "\"target_reached\":" << boolJson(auto_workspace_runtime_state.target_reached) << ","
+        << "\"phase\":\"" << jsonEscape(auto_workspace_runtime_state.phase) << "\","
+        << "\"message\":\"" << jsonEscape(auto_workspace_runtime_state.message) << "\","
+        << "\"planner\":\"" << jsonEscape(auto_workspace_plan_state.planner) << "\","
+        << "\"route_provider\":\"" << jsonEscape(auto_workspace_plan_state.route_provider) << "\","
+        << "\"control_cycle_id\":" << auto_workspace_runtime_state.last_control_cycle_id << ","
+        << "\"active_path_index\":" << auto_workspace_runtime_state.active_path_index << ","
+        << "\"current_x_m\":" << numberJson(auto_workspace_current_x_m, 3) << ","
+        << "\"current_y_m\":" << numberJson(auto_workspace_current_y_m, 3) << ","
+        << "\"origin_latitude\":" << (
+                auto_workspace_origin_valid ?
+                    numberJson(auto_workspace_local_frame_state.origin_latitude, 7) :
+                    "null") << ","
+        << "\"origin_longitude\":" << (
+                auto_workspace_origin_valid ?
+                    numberJson(auto_workspace_local_frame_state.origin_longitude, 7) :
+                    "null") << ","
+        << "\"origin_altitude_m\":" << (
+                auto_workspace_origin_valid ?
+                    numberJson(auto_workspace_local_frame_state.origin_altitude, 2) :
+                    "null") << ","
+        << "\"origin_lock_ready\":" << boolJson(gps_state.origin_stable) << ","
+        << "\"origin_lock_radius_m\":" << numberJson(gps_state.origin_stability_radius_m, 3) << ","
+        << "\"origin_lock_samples\":" << gps_state.origin_stability_samples << ","
+        << "\"destination_latitude\":" << (auto_workspace_plan_state.valid ? numberJson(auto_workspace_plan_state.destination_latitude, 7) : "null") << ","
+        << "\"destination_longitude\":" << (auto_workspace_plan_state.valid ? numberJson(auto_workspace_plan_state.destination_longitude, 7) : "null") << ","
+        << "\"destination_x_m\":" << numberJson(auto_workspace_runtime_state.destination_x_m, 3) << ","
+        << "\"destination_y_m\":" << numberJson(auto_workspace_runtime_state.destination_y_m, 3) << ","
+        << "\"remaining_distance_m\":" << numberJson(auto_workspace_runtime_state.remaining_distance_m, 3) << ","
+        << "\"target_bearing_deg\":" << numberJson(auto_workspace_runtime_state.target_bearing_deg, 3) << ","
+        << "\"heading_error_deg\":" << numberJson(auto_workspace_runtime_state.heading_error_deg, 3) << ","
+        << "\"command_speed_cm_s\":" << auto_workspace_runtime_state.command_speed_cm_s << ","
+        << "\"command_steering_encoder\":" << auto_workspace_runtime_state.command_steering_encoder << ","
+        << "\"preview_distance_m\":" << (auto_workspace_plan_state.valid ? numberJson(auto_workspace_plan_state.preview_distance_m, 2) : "null") << ","
+        << "\"preview_duration_s\":" << (auto_workspace_plan_state.valid ? numberJson(auto_workspace_plan_state.preview_duration_s, 1) : "null") << ","
+        << "\"preview_bearing_deg\":" << (auto_workspace_plan_state.valid ? numberJson(auto_workspace_plan_state.preview_bearing_deg, 2) : "null") << ","
+        << "\"path\":" << (auto_workspace_plan_state.valid ? auto_workspace_path_json() : "[]")
         << "}"
         << "},"
         << "\"rgb_yolo_payload\":\"" << jsonEscape(rgb_yolo_payload) << "\""
@@ -3437,10 +5178,22 @@ std::string LogDashboardServer::latestRgbYoloPayloadJson() const {
         received_steady != std::chrono::steady_clock::time_point{} &&
         (std::chrono::steady_clock::now() - received_steady) <= kRgbYoloFreshWindow;
     if (has_live_payload) {
+        const std::string live_photo_url = extractJsonStringField(payload, "last_photo_url");
+        if (live_photo_url.empty()) {
+            const std::string fallback = latestSavedRgbYoloPayloadJson();
+            if (!fallback.empty()) {
+                return mergeLivePayloadWithSavedPhoto(payload, fallback);
+            }
+        }
         return payload;
     }
 
-    return "";
+    const std::string fallback = latestSavedRgbYoloPayloadJson();
+    if (!fallback.empty()) {
+        return fallback;
+    }
+
+    return payload;
 }
 
 std::string LogDashboardServer::latestSavedRgbYoloPayloadJson() const {
