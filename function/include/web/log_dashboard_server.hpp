@@ -54,6 +54,12 @@ private:
         bool origin_stable = false;
         double origin_stability_radius_m = 0.0;
         std::size_t origin_stability_samples = 0;
+        bool heading_valid = false;
+        double heading_deg = 0.0;
+        std::string heading_source;
+        bool base_link_valid = false;
+        double base_link_latitude = 0.0;
+        double base_link_longitude = 0.0;
     };
 
     struct AutoWorkspaceLocalFrameState {
@@ -80,6 +86,12 @@ private:
         double filtered_altitude_m = 0.0;
         std::deque<GpsFilterSample> raw_window;
         std::deque<GpsFilterSample> filtered_window;
+        bool course_anchor_valid = false;
+        double course_anchor_x_m = 0.0;
+        double course_anchor_y_m = 0.0;
+        bool heading_offset_valid = false;
+        double heading_offset_deg = 0.0;
+        std::string heading_source;
     };
 
     struct ImuRuntimeState {
@@ -183,12 +195,16 @@ private:
         bool task_running = false;
         bool gps_valid = false;
         bool imu_valid = false;
+        bool heading_valid = false;
         bool local_frame_valid = false;
         bool avoidance_active = false;
         bool target_reached = false;
         std::int64_t last_control_cycle_id = 0;
+        double current_latitude = 0.0;
+        double current_longitude = 0.0;
         double current_x_m = 0.0;
         double current_y_m = 0.0;
+        double current_yaw_deg = 0.0;
         double destination_x_m = 0.0;
         double destination_y_m = 0.0;
         double remaining_distance_m = 0.0;
@@ -197,6 +213,7 @@ private:
         std::size_t active_path_index = 0;
         int command_speed_cm_s = 0;
         int command_steering_encoder = 0;
+        std::string heading_source;
         std::string route_provider;
         std::string phase = "idle";
         std::string message = "自动任务待命";
@@ -216,6 +233,7 @@ private:
     void stopAutoWorkspaceControl(bool send_stop = true);
     void runAutoWorkspaceControlLoop();
     AutoAvoidController::SensorSnapshot autoAvoidSensorSnapshot() const;
+    AutoAvoidController::SensorSnapshot autoWorkspaceAvoidSensorSnapshot() const;
     AutoAvoidCommandTrace applyAutoAvoidCommand(
         const AutoAvoidController::Command& command,
         AutoAvoidController::Command& last_command,
@@ -243,18 +261,34 @@ private:
         double longitude,
         double altitude,
         double horizontal_stddev_m);
-    void resetLidarDisplayFilterLocked();
+    void resetAutoWorkspaceGpsFilterLocked();
+    void updateAutoWorkspaceFilteredGpsLocked(
+        double latitude,
+        double longitude,
+        double altitude,
+        double horizontal_stddev_m,
+        const std::chrono::steady_clock::time_point& now);
+    void updateAutoWorkspaceHeadingFromRouteLocked(double route_bearing_deg);
+    void resetLidarDisplayFilterLocked(LidarDisplayFilterState& filter_state);
     LidarRuntimeState::SectorRuntimeState filteredLidarDisplaySectorLocked(
         const LidarRuntimeState::SectorRuntimeState& sample,
-        std::deque<LidarRuntimeState::SectorRuntimeState>& history) const;
+        std::deque<LidarRuntimeState::SectorRuntimeState>& history,
+        int filter_window) const;
     LidarRuntimeState::SectorRuntimeState filterLidarDisplayFrontLocked(
         const LidarRuntimeState::SectorRuntimeState& front,
         const LidarRuntimeState::SectorRuntimeState& negative_front,
-        const LidarRuntimeState::SectorRuntimeState& positive_front);
+        const LidarRuntimeState::SectorRuntimeState& positive_front,
+        LidarDisplayFilterState& filter_state,
+        const AutoAvoidController::Config& config);
+    void updateLidarRuntimeLocked(
+        LidarRuntimeState& runtime_state,
+        LidarDisplayFilterState& filter_state,
+        const AutoAvoidInputBuilder::LidarInputFrame& lidar_input_frame,
+        const AutoAvoidController::Config& config);
     std::string stateJson() const;
     std::string latestRgbYoloPayloadJson() const;
     std::string latestSavedRgbYoloPayloadJson() const;
-    bool stopModeSwitchReady(std::string& reason) const;
+    bool stopModeSwitchReady(const std::string& target_mode, std::string& reason) const;
 
 private:
     std::string web_root_;
@@ -283,12 +317,20 @@ private:
     AutoAvoidController auto_avoid_controller_;
     AutoAvoidInputBuilder auto_avoid_input_builder_;
     AutoAvoidControlSnapshotPool auto_avoid_control_snapshot_pool_;
+    AutoAvoidController auto_workspace_avoid_controller_;
+    AutoAvoidInputBuilder auto_workspace_avoid_input_builder_;
+    AutoAvoidControlSnapshotPool auto_workspace_avoid_control_snapshot_pool_;
     DepthRuntimeState depth_state_;
     LidarRuntimeState lidar_state_;
     LidarDisplayFilterState lidar_display_filter_state_;
+    LidarRuntimeState auto_workspace_lidar_state_;
+    LidarDisplayFilterState auto_workspace_lidar_display_filter_state_;
     ImuRuntimeState imu_state_;
     GpsRuntimeState gps_state_;
     GpsFilterState gps_filter_state_;
+    ImuRuntimeState auto_workspace_imu_state_;
+    GpsRuntimeState auto_workspace_gps_state_;
+    GpsFilterState auto_workspace_gps_filter_state_;
     AutoWorkspaceLocalFrameState auto_workspace_local_frame_state_;
     std::string latest_rgb_yolo_payload_;
     std::chrono::steady_clock::time_point latest_rgb_yolo_received_steady_{};
@@ -299,4 +341,5 @@ private:
     AutoWorkspaceRuntimeState auto_workspace_runtime_state_;
     VehicleCommandState vehicle_command_state_;
     AutoAvoidRuntimeState auto_avoid_runtime_state_;
+    AutoAvoidRuntimeState auto_workspace_avoid_runtime_state_;
 };

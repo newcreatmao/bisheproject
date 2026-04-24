@@ -55,6 +55,10 @@ constexpr std::size_t kGpsOriginStabilityWindowSize = 15;
 constexpr double kGpsFilterEmaAlpha = 0.28;
 constexpr double kGpsOriginStableRadiusM = 0.90;
 constexpr double kGpsOriginStableHorizontalStdDevM = 4.0;
+constexpr double kAutoWorkspaceHeadingCourseMinTravelM = 1.4;
+constexpr double kAutoWorkspaceHeadingOffsetEmaAlpha = 0.25;
+constexpr double kAutoWorkspaceGpsOffsetXM = -0.68;
+constexpr double kAutoWorkspaceGpsOffsetYM = 0.28;
 constexpr int kStm32StartSpeedRaw = 30;
 constexpr double kStm32ToWebSpeedScale = 0.89;
 constexpr int kStm32StartAngleCommand = 0;
@@ -631,6 +635,10 @@ double initialBearingDeg(
     return radToDeg(std::atan2(y, x));
 }
 
+double planarBearingDeg(double x_m, double y_m) {
+    return radToDeg(std::atan2(x_m, y_m));
+}
+
 double normalizeHeadingDifferenceDeg(double value_deg) {
     while (value_deg > 180.0) {
         value_deg -= 360.0;
@@ -652,6 +660,20 @@ int autoWorkspaceSteeringEncoderForHeadingError(double heading_error_deg) {
         kAutoWorkspaceMaxSteeringDeg);
     return static_cast<int>(std::lround(
         steering_deg * static_cast<double>(kAutoWorkspaceEncoderPer10Deg) / 10.0));
+}
+
+std::pair<double, double> planarOffsetFromBodyFrameMeters(
+    double heading_deg,
+    double forward_x_m,
+    double left_y_m) {
+    const double heading_rad = degToRad(heading_deg);
+    const double east_m =
+        forward_x_m * std::sin(heading_rad) -
+        left_y_m * std::cos(heading_rad);
+    const double north_m =
+        forward_x_m * std::cos(heading_rad) +
+        left_y_m * std::sin(heading_rad);
+    return {east_m, north_m};
 }
 
 std::pair<double, double> localPlanarOffsetMeters(
@@ -1459,7 +1481,9 @@ void LogDashboardServer::stop() {
     stopStm32Bridge();
 }
 
-bool LogDashboardServer::stopModeSwitchReady(std::string& reason) const {
+bool LogDashboardServer::stopModeSwitchReady(
+    const std::string& target_mode,
+    std::string& reason) const {
     const fs::path runtime_dir = fs::path(runtimeLogsDir());
     const ComponentProcessState stack_process =
         componentProcessState(runtime_dir / "pids" / "project_stack.pid", kStackProcessNeedle);
@@ -1472,19 +1496,33 @@ bool LogDashboardServer::stopModeSwitchReady(std::string& reason) const {
 
     DepthRuntimeState depth_state;
     LidarRuntimeState lidar_state;
+    LidarRuntimeState auto_workspace_lidar_state;
     ImuRuntimeState imu_state;
     GpsRuntimeState gps_state;
+    ImuRuntimeState auto_workspace_imu_state;
+    GpsRuntimeState auto_workspace_gps_state;
     std::string live_rgb_yolo_payload;
     std::chrono::steady_clock::time_point rgb_yolo_received_steady;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         depth_state = depth_state_;
         lidar_state = lidar_state_;
+        auto_workspace_lidar_state = auto_workspace_lidar_state_;
         imu_state = imu_state_;
         gps_state = gps_state_;
+        auto_workspace_imu_state = auto_workspace_imu_state_;
+        auto_workspace_gps_state = auto_workspace_gps_state_;
         live_rgb_yolo_payload = latest_rgb_yolo_payload_;
         rgb_yolo_received_steady = latest_rgb_yolo_received_steady_;
     }
+
+    const bool target_auto = target_mode == "AUTO";
+    const auto& selected_lidar_state =
+        target_auto ? auto_workspace_lidar_state : lidar_state;
+    const auto& selected_imu_state =
+        target_auto ? auto_workspace_imu_state : imu_state;
+    const auto& selected_gps_state =
+        target_auto ? auto_workspace_gps_state : gps_state;
 
     std::vector<std::string> pending_devices;
     const auto push_pending = [&](bool ready, const char* label) {
@@ -1494,16 +1532,16 @@ bool LogDashboardServer::stopModeSwitchReady(std::string& reason) const {
     };
 
     const bool gps_ready =
-        gps_state.filtered_valid &&
-        gps_state.status >= 0 &&
-        gps_state.message_count > 0 &&
-        (now_steady - gps_state.last_message_steady_) <= kSensorFreshWindow;
+        selected_gps_state.filtered_valid &&
+        selected_gps_state.status >= 0 &&
+        selected_gps_state.message_count > 0 &&
+        (now_steady - selected_gps_state.last_message_steady_) <= kSensorFreshWindow;
     const bool imu_ready =
-        imu_state.message_count > 0 &&
-        (now_steady - imu_state.last_message_steady_) <= kSensorFreshWindow;
+        selected_imu_state.message_count > 0 &&
+        (now_steady - selected_imu_state.last_message_steady_) <= kSensorFreshWindow;
     const bool lidar_ready =
-        lidar_state.message_count > 0 &&
-        (now_steady - lidar_state.last_message_steady_) <= kSensorFreshWindow;
+        selected_lidar_state.message_count > 0 &&
+        (now_steady - selected_lidar_state.last_message_steady_) <= kSensorFreshWindow;
     const bool depth_ready =
         depth_state.message_count > 0 &&
         (now_steady - depth_state.last_message_steady_) <= kSensorFreshWindow;
@@ -1636,15 +1674,15 @@ void LogDashboardServer::configureRoutes() {
             return;
         }
 
-        GpsRuntimeState gps_state;
-        ImuRuntimeState imu_state;
+        GpsRuntimeState auto_workspace_gps_state;
+        ImuRuntimeState auto_workspace_imu_state;
         AutoWorkspaceLocalFrameState local_frame_state;
         AutoWorkspaceRuntimeState auto_workspace_runtime_state;
         const auto now_steady = std::chrono::steady_clock::now();
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            gps_state = gps_state_;
-            imu_state = imu_state_;
+            auto_workspace_gps_state = auto_workspace_gps_state_;
+            auto_workspace_imu_state = auto_workspace_imu_state_;
             local_frame_state = auto_workspace_local_frame_state_;
             auto_workspace_runtime_state = auto_workspace_runtime_state_;
         }
@@ -1658,12 +1696,12 @@ void LogDashboardServer::configureRoutes() {
         }
 
         const bool gps_ready =
-            gps_state.filtered_valid &&
-            gps_state.status >= 0 &&
-            gps_state.message_count > 0 &&
-            (now_steady - gps_state.last_message_steady_) <= kSensorFreshWindow &&
-            std::isfinite(gps_state.latitude) &&
-            std::isfinite(gps_state.longitude);
+            auto_workspace_gps_state.filtered_valid &&
+            auto_workspace_gps_state.status >= 0 &&
+            auto_workspace_gps_state.message_count > 0 &&
+            (now_steady - auto_workspace_gps_state.last_message_steady_) <= kSensorFreshWindow &&
+            std::isfinite(auto_workspace_gps_state.latitude) &&
+            std::isfinite(auto_workspace_gps_state.longitude);
         if (!gps_ready) {
             setJson(
                 res,
@@ -1679,8 +1717,14 @@ void LogDashboardServer::configureRoutes() {
             return;
         }
 
-        const double origin_lat = gps_state.latitude;
-        const double origin_lon = gps_state.longitude;
+        const double origin_lat =
+            auto_workspace_gps_state.base_link_valid ?
+                auto_workspace_gps_state.base_link_latitude :
+                auto_workspace_gps_state.latitude;
+        const double origin_lon =
+            auto_workspace_gps_state.base_link_valid ?
+                auto_workspace_gps_state.base_link_longitude :
+                auto_workspace_gps_state.longitude;
         const auto [requested_destination_lat, requested_destination_lon] =
             latLonFromLocalPlanarOffsetMeters(
             local_frame_state.origin_latitude,
@@ -1790,6 +1834,11 @@ void LogDashboardServer::configureRoutes() {
                 preview_path[target_index].longitude);
         }
 
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            updateAutoWorkspaceHeadingFromRouteLocked(bearing_deg);
+        }
+
         std::ostringstream path_json;
         path_json << "[";
         for (std::size_t index = 0; index < preview_path.size(); ++index) {
@@ -1845,10 +1894,10 @@ void LogDashboardServer::configureRoutes() {
             << "},"
             << "\"imu\":{"
             << "\"valid\":" << boolJson(
-                imu_state.has_attitude &&
-                imu_state.message_count > 0 &&
-                (now_steady - imu_state.last_message_steady_) <= kSensorFreshWindow) << ","
-            << "\"yaw_deg\":" << numberJson(imu_state.yaw_deg, 1)
+                auto_workspace_imu_state.has_attitude &&
+                auto_workspace_imu_state.message_count > 0 &&
+                (now_steady - auto_workspace_imu_state.last_message_steady_) <= kSensorFreshWindow) << ","
+            << "\"yaw_deg\":" << numberJson(auto_workspace_imu_state.yaw_deg, 1)
             << "},"
             << "\"path\":" << path_json.str()
             << "}";
@@ -2103,38 +2152,60 @@ void LogDashboardServer::configureRoutes() {
                 stop_ok ? "自动任务已停止" : "自动任务停止发送失败"));
     });
 
-    server_.Get("/api/lidar/sectors", [this](const httplib::Request&, httplib::Response& res) {
+    server_.Get("/api/lidar/sectors", [this](const httplib::Request& req, httplib::Response& res) {
         const fs::path runtime_dir = fs::path(runtimeLogsDir());
         const ComponentProcessState stack_process =
             componentProcessState(runtime_dir / "pids" / "project_stack.pid", kStackProcessNeedle);
         const auto now_steady = std::chrono::steady_clock::now();
 
         LidarRuntimeState lidar_state;
+        LidarRuntimeState auto_workspace_lidar_state;
         ImuRuntimeState imu_state;
+        ImuRuntimeState auto_workspace_imu_state;
         AutoAvoidRuntimeState auto_avoid_runtime_state;
+        AutoAvoidRuntimeState auto_workspace_avoid_runtime_state;
+        std::string active_workspace_mode;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             lidar_state = lidar_state_;
+            auto_workspace_lidar_state = auto_workspace_lidar_state_;
             imu_state = imu_state_;
+            auto_workspace_imu_state = auto_workspace_imu_state_;
             auto_avoid_runtime_state = auto_avoid_runtime_state_;
+            auto_workspace_avoid_runtime_state = auto_workspace_avoid_runtime_state_;
+            active_workspace_mode = active_workspace_mode_;
         }
+
+        const std::string requested_workspace =
+            normalizeWorkspaceMode(
+                req.has_param("workspace") ? req.get_param_value("workspace") : "");
+        const bool use_auto_workspace =
+            requested_workspace == "AUTO" ||
+            (requested_workspace != "AVOIDANCE" && active_workspace_mode == "AUTO");
+        const std::string workspace_name = use_auto_workspace ? "AUTO" : "AVOIDANCE";
+        const auto& selected_lidar_state =
+            use_auto_workspace ? auto_workspace_lidar_state : lidar_state;
+        const auto& selected_imu_state =
+            use_auto_workspace ? auto_workspace_imu_state : imu_state;
+        const auto& selected_avoid_runtime_state =
+            use_auto_workspace ? auto_workspace_avoid_runtime_state : auto_avoid_runtime_state;
 
         const bool lidar_key_valid =
             stack_process.running &&
-            lidar_state.valid &&
-            lidar_state.valid_points > 0 &&
-            lidar_state.message_count > 0 &&
-            (now_steady - lidar_state.last_message_steady_) <= kSensorFreshWindow;
+            selected_lidar_state.valid &&
+            selected_lidar_state.valid_points > 0 &&
+            selected_lidar_state.message_count > 0 &&
+            (now_steady - selected_lidar_state.last_message_steady_) <= kSensorFreshWindow;
         const bool imu_key_valid =
             stack_process.running &&
-            imu_state.has_attitude &&
-            imu_state.message_count > 0 &&
-            (now_steady - imu_state.last_message_steady_) <= kSensorFreshWindow;
-        const auto& filtered_front_debug = auto_avoid_runtime_state.last_decision.debug;
+            selected_imu_state.has_attitude &&
+            selected_imu_state.message_count > 0 &&
+            (now_steady - selected_imu_state.last_message_steady_) <= kSensorFreshWindow;
+        const auto& filtered_front_debug = selected_avoid_runtime_state.last_decision.debug;
         const bool control_front_valid =
             stack_process.running &&
-            auto_avoid_runtime_state.has_decision &&
-            auto_avoid_runtime_state.lidar_valid &&
+            selected_avoid_runtime_state.has_decision &&
+            selected_avoid_runtime_state.lidar_valid &&
             filtered_front_debug.control_snapshot_fresh &&
             filtered_front_debug.front_nearest_valid &&
             std::isfinite(filtered_front_debug.front_nearest_m) &&
@@ -2143,66 +2214,67 @@ void LogDashboardServer::configureRoutes() {
             control_front_valid ?
                 AutoAvoidInputBuilder::frontNearestZoneFromAngle(
                     filtered_front_debug.front_angle_deg,
-                    lidar_state.filtered_front_nearest_zone) :
-                (lidar_key_valid ? lidar_state.filtered_front_nearest_zone : std::string());
+                    selected_lidar_state.filtered_front_nearest_zone) :
+                (lidar_key_valid ? selected_lidar_state.filtered_front_nearest_zone : std::string());
         const int front_valid_points =
             control_front_valid ?
                 filtered_front_debug.front_support_points :
-                lidar_state.filtered_auto_avoid_front_sector.valid_points;
+                selected_lidar_state.filtered_auto_avoid_front_sector.valid_points;
         const int front_support_points =
             control_front_valid ?
                 filtered_front_debug.front_support_points :
-                lidar_state.filtered_auto_avoid_front_sector.support_points;
+                selected_lidar_state.filtered_auto_avoid_front_sector.support_points;
         const auto& front_target_selection =
             control_front_valid ?
                 filtered_front_debug.front_target_selection :
-                lidar_state.front_target_selection;
+                selected_lidar_state.front_target_selection;
 
         std::ostringstream out;
         out << "{"
             << "\"ok\":true,"
+            << "\"workspace\":\"" << jsonEscape(workspace_name) << "\","
             << "\"imu\":{"
             << "\"valid\":" << boolJson(imu_key_valid) << ","
-            << "\"roll_deg\":" << (imu_key_valid ? numberJson(imu_state.roll_deg, 1) : "null") << ","
-            << "\"pitch_deg\":" << (imu_key_valid ? numberJson(imu_state.pitch_deg, 1) : "null") << ","
-            << "\"yaw_deg\":" << (imu_key_valid ? numberJson(imu_state.yaw_deg, 1) : "null")
+            << "\"roll_deg\":" << (imu_key_valid ? numberJson(selected_imu_state.roll_deg, 1) : "null") << ","
+            << "\"pitch_deg\":" << (imu_key_valid ? numberJson(selected_imu_state.pitch_deg, 1) : "null") << ","
+            << "\"yaw_deg\":" << (imu_key_valid ? numberJson(selected_imu_state.yaw_deg, 1) : "null")
             << "},"
             << "\"lidar\":{"
             << "\"valid\":" << boolJson(lidar_key_valid) << ","
             << "\"front_nearest_zone\":\"" << jsonEscape(front_nearest_zone) << "\","
             << "\"sectors\":{"
             << "\"negative_front\":{"
-            << "\"valid\":" << boolJson(lidar_key_valid && lidar_state.negative_front_sector.valid) << ","
-            << "\"nearest_m\":" << (lidar_key_valid && lidar_state.negative_front_sector.valid ? numberJson(lidar_state.negative_front_sector.nearest_m, 2) : "null") << ","
-            << "\"nearest_angle_deg\":" << (lidar_key_valid && lidar_state.negative_front_sector.valid ? numberJson(lidar_state.negative_front_sector.nearest_angle_deg, 1) : "null") << ","
-            << "\"valid_points\":" << lidar_state.negative_front_sector.valid_points << ","
-            << "\"support_points\":" << lidar_state.negative_front_sector.support_points
+            << "\"valid\":" << boolJson(lidar_key_valid && selected_lidar_state.negative_front_sector.valid) << ","
+            << "\"nearest_m\":" << (lidar_key_valid && selected_lidar_state.negative_front_sector.valid ? numberJson(selected_lidar_state.negative_front_sector.nearest_m, 2) : "null") << ","
+            << "\"nearest_angle_deg\":" << (lidar_key_valid && selected_lidar_state.negative_front_sector.valid ? numberJson(selected_lidar_state.negative_front_sector.nearest_angle_deg, 1) : "null") << ","
+            << "\"valid_points\":" << selected_lidar_state.negative_front_sector.valid_points << ","
+            << "\"support_points\":" << selected_lidar_state.negative_front_sector.support_points
             << "},"
             << "\"front\":{"
             << "\"valid\":" << boolJson(
                     control_front_valid ||
-                    (lidar_key_valid && lidar_state.filtered_auto_avoid_front_sector.valid)) << ","
+                    (lidar_key_valid && selected_lidar_state.filtered_auto_avoid_front_sector.valid)) << ","
             << "\"nearest_m\":" << (
                     control_front_valid ?
                         numberJson(filtered_front_debug.front_nearest_m, 2) :
-                        (lidar_key_valid && lidar_state.filtered_auto_avoid_front_sector.valid ?
-                            numberJson(lidar_state.filtered_auto_avoid_front_sector.nearest_m, 2) :
+                        (lidar_key_valid && selected_lidar_state.filtered_auto_avoid_front_sector.valid ?
+                            numberJson(selected_lidar_state.filtered_auto_avoid_front_sector.nearest_m, 2) :
                             "null")) << ","
             << "\"nearest_angle_deg\":" << (
                     control_front_valid ?
                         numberJson(filtered_front_debug.front_angle_deg, 1) :
-                        (lidar_key_valid && lidar_state.filtered_auto_avoid_front_sector.valid ?
-                            numberJson(lidar_state.filtered_auto_avoid_front_sector.nearest_angle_deg, 1) :
+                        (lidar_key_valid && selected_lidar_state.filtered_auto_avoid_front_sector.valid ?
+                            numberJson(selected_lidar_state.filtered_auto_avoid_front_sector.nearest_angle_deg, 1) :
                             "null")) << ","
             << "\"valid_points\":" << front_valid_points << ","
             << "\"support_points\":" << front_support_points
             << "},"
             << "\"positive_front\":{"
-            << "\"valid\":" << boolJson(lidar_key_valid && lidar_state.positive_front_sector.valid) << ","
-            << "\"nearest_m\":" << (lidar_key_valid && lidar_state.positive_front_sector.valid ? numberJson(lidar_state.positive_front_sector.nearest_m, 2) : "null") << ","
-            << "\"nearest_angle_deg\":" << (lidar_key_valid && lidar_state.positive_front_sector.valid ? numberJson(lidar_state.positive_front_sector.nearest_angle_deg, 1) : "null") << ","
-            << "\"valid_points\":" << lidar_state.positive_front_sector.valid_points << ","
-            << "\"support_points\":" << lidar_state.positive_front_sector.support_points
+            << "\"valid\":" << boolJson(lidar_key_valid && selected_lidar_state.positive_front_sector.valid) << ","
+            << "\"nearest_m\":" << (lidar_key_valid && selected_lidar_state.positive_front_sector.valid ? numberJson(selected_lidar_state.positive_front_sector.nearest_m, 2) : "null") << ","
+            << "\"nearest_angle_deg\":" << (lidar_key_valid && selected_lidar_state.positive_front_sector.valid ? numberJson(selected_lidar_state.positive_front_sector.nearest_angle_deg, 1) : "null") << ","
+            << "\"valid_points\":" << selected_lidar_state.positive_front_sector.valid_points << ","
+            << "\"support_points\":" << selected_lidar_state.positive_front_sector.support_points
             << "}"
             << "},"
             << "\"front_target_selection\":{"
@@ -2417,7 +2489,7 @@ void LogDashboardServer::configureRoutes() {
 
         if (current_mode == "STOP" && target_mode != "STOP") {
             std::string reason;
-            if (!stopModeSwitchReady(reason)) {
+            if (!stopModeSwitchReady(target_mode, reason)) {
                 setJson(
                     res,
                     409,
@@ -2496,6 +2568,10 @@ void LogDashboardServer::configureRoutes() {
                 auto_workspace_runtime_state_.task_running = false;
                 auto_workspace_runtime_state_.avoidance_active = false;
                 auto_workspace_runtime_state_.active_path_index = 0;
+                auto_workspace_avoid_runtime_state_.active = false;
+                auto_workspace_avoid_runtime_state_.has_decision = false;
+                auto_workspace_avoid_runtime_state_.last_decision = AutoAvoidController::Command{};
+                auto_workspace_avoid_runtime_state_.last_apply_result = "inactive";
                 if (auto_workspace_runtime_state_.phase != "arrived") {
                     auto_workspace_runtime_state_.phase = "idle";
                     auto_workspace_runtime_state_.message = "自动工作区待命";
@@ -2507,6 +2583,10 @@ void LogDashboardServer::configureRoutes() {
             log_info(
                 kLogModule,
                 std::string("workspace switched away from avoidance; cleared start ACK pending state"));
+        }
+        if (target_mode == "AUTO" || current_mode == "AUTO") {
+            auto_workspace_avoid_controller_.reset();
+            auto_workspace_avoid_control_snapshot_pool_.clear();
         }
 
         std::ostringstream out;
@@ -3025,6 +3105,16 @@ AutoAvoidController::SensorSnapshot LogDashboardServer::autoAvoidSensorSnapshot(
     return control_snapshot.snapshot;
 }
 
+AutoAvoidController::SensorSnapshot LogDashboardServer::autoWorkspaceAvoidSensorSnapshot() const {
+    const auto now = std::chrono::steady_clock::now();
+    const auto control_snapshot =
+        auto_workspace_avoid_control_snapshot_pool_.buildControlSnapshot(
+            auto_workspace_avoid_input_builder_,
+            now,
+            kSensorFreshWindow);
+    return control_snapshot.snapshot;
+}
+
 LogDashboardServer::AutoAvoidCommandTrace LogDashboardServer::applyAutoAvoidCommand(
     const AutoAvoidController::Command& command,
     AutoAvoidController::Command& last_command,
@@ -3510,7 +3600,8 @@ void LogDashboardServer::stopAutoWorkspaceControl(bool send_stop) {
         auto_workspace_control_thread_.join();
     }
 
-    auto_avoid_controller_.reset();
+    auto_workspace_avoid_controller_.reset();
+    auto_workspace_avoid_control_snapshot_pool_.clear();
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         auto_workspace_runtime_state_.awaiting_start_ack = false;
@@ -3519,6 +3610,13 @@ void LogDashboardServer::stopAutoWorkspaceControl(bool send_stop) {
         auto_workspace_runtime_state_.active_path_index = 0;
         auto_workspace_runtime_state_.command_speed_cm_s = 0;
         auto_workspace_runtime_state_.command_steering_encoder = 0;
+        auto_workspace_avoid_runtime_state_.active = false;
+        auto_workspace_avoid_runtime_state_.has_decision = false;
+        auto_workspace_avoid_runtime_state_.snapshot_valid = false;
+        auto_workspace_avoid_runtime_state_.lidar_valid = false;
+        auto_workspace_avoid_runtime_state_.imu_valid = false;
+        auto_workspace_avoid_runtime_state_.last_decision = AutoAvoidController::Command{};
+        auto_workspace_avoid_runtime_state_.last_apply_result = "stopped";
     }
 
     if (send_stop) {
@@ -3726,15 +3824,15 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
         ++control_cycle_id;
 
         std::string active_mode;
-        GpsRuntimeState gps_state;
-        ImuRuntimeState imu_state;
+        GpsRuntimeState auto_workspace_gps_state;
+        ImuRuntimeState auto_workspace_imu_state;
         AutoWorkspaceLocalFrameState local_frame_state;
         AutoWorkspacePlanState plan_state;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             active_mode = active_workspace_mode_;
-            gps_state = gps_state_;
-            imu_state = imu_state_;
+            auto_workspace_gps_state = auto_workspace_gps_state_;
+            auto_workspace_imu_state = auto_workspace_imu_state_;
             local_frame_state = auto_workspace_local_frame_state_;
             plan_state = auto_workspace_plan_state_;
         }
@@ -3745,18 +3843,29 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
 
         const auto now = std::chrono::steady_clock::now();
         const bool gps_valid =
-            gps_state.filtered_valid &&
-            gps_state.status >= 0 &&
-            gps_state.message_count > 0 &&
-            (now - gps_state.last_message_steady_) <= kSensorFreshWindow &&
-            std::isfinite(gps_state.latitude) &&
-            std::isfinite(gps_state.longitude);
+            auto_workspace_gps_state.filtered_valid &&
+            auto_workspace_gps_state.status >= 0 &&
+            auto_workspace_gps_state.message_count > 0 &&
+            (now - auto_workspace_gps_state.last_message_steady_) <= kSensorFreshWindow &&
+            auto_workspace_gps_state.base_link_valid &&
+            std::isfinite(auto_workspace_gps_state.base_link_latitude) &&
+            std::isfinite(auto_workspace_gps_state.base_link_longitude);
         const bool imu_valid =
-            imu_state.has_attitude &&
-            imu_state.message_count > 0 &&
-            (now - imu_state.last_message_steady_) <= kSensorFreshWindow &&
-            std::isfinite(imu_state.yaw_deg);
+            auto_workspace_imu_state.has_attitude &&
+            auto_workspace_imu_state.message_count > 0 &&
+            (now - auto_workspace_imu_state.last_message_steady_) <= kSensorFreshWindow &&
+            std::isfinite(auto_workspace_imu_state.yaw_deg);
+        const bool heading_valid =
+            imu_valid &&
+            auto_workspace_gps_state.heading_valid &&
+            std::isfinite(auto_workspace_gps_state.heading_deg);
         const bool local_frame_valid = local_frame_state.valid;
+        const double current_latitude =
+            gps_valid ? auto_workspace_gps_state.base_link_latitude : 0.0;
+        const double current_longitude =
+            gps_valid ? auto_workspace_gps_state.base_link_longitude : 0.0;
+        const double current_yaw_deg =
+            heading_valid ? auto_workspace_gps_state.heading_deg : 0.0;
 
         double current_x_m = 0.0;
         double current_y_m = 0.0;
@@ -3764,8 +3873,8 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
             std::tie(current_x_m, current_y_m) = localPlanarOffsetMeters(
                 local_frame_state.origin_latitude,
                 local_frame_state.origin_longitude,
-                gps_state.latitude,
-                gps_state.longitude);
+                current_latitude,
+                current_longitude);
         }
 
         AutoWorkspaceRuntimeState runtime_update;
@@ -3776,10 +3885,15 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
         runtime_update.plan_ready = plan_state.valid;
         runtime_update.gps_valid = gps_valid;
         runtime_update.imu_valid = imu_valid;
+        runtime_update.heading_valid = heading_valid;
         runtime_update.local_frame_valid = local_frame_valid;
         runtime_update.last_control_cycle_id = control_cycle_id;
+        runtime_update.current_latitude = current_latitude;
+        runtime_update.current_longitude = current_longitude;
         runtime_update.current_x_m = current_x_m;
         runtime_update.current_y_m = current_y_m;
+        runtime_update.current_yaw_deg = current_yaw_deg;
+        runtime_update.heading_source = auto_workspace_gps_state.heading_source;
         runtime_update.destination_x_m = plan_state.destination_x_m;
         runtime_update.destination_y_m = plan_state.destination_y_m;
         runtime_update.route_provider = plan_state.route_provider;
@@ -3802,12 +3916,15 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
                 auto_workspace_runtime_state_ = runtime_update;
+                auto_workspace_avoid_runtime_state_.active = false;
+                auto_workspace_avoid_runtime_state_.has_decision = false;
+                auto_workspace_avoid_runtime_state_.last_apply_result = "plan_missing";
             }
             auto_workspace_control_running_.store(false);
             break;
         }
 
-        if (!gps_valid || !imu_valid || !local_frame_valid) {
+        if (!gps_valid || !imu_valid || !heading_valid || !local_frame_valid) {
             applyAutoWorkspaceDriveCommand(
                 true,
                 0,
@@ -3823,12 +3940,17 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
             runtime_update.phase = "waiting_sensor";
             runtime_update.message =
                 !gps_valid ? "自动任务等待 GPS" :
-                (!imu_valid ? "自动任务等待 IMU" : "自动任务等待 XY 原点");
+                (!imu_valid ? "自动任务等待 IMU" :
+                    (!heading_valid ? "自动任务等待 GPS/IMU 航向对齐" :
+                        "自动任务等待 XY 原点"));
             runtime_update.command_speed_cm_s = 0;
             runtime_update.command_steering_encoder = 0;
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
-                    auto_workspace_runtime_state_ = runtime_update;
+                auto_workspace_runtime_state_ = runtime_update;
+                auto_workspace_avoid_runtime_state_.active = false;
+                auto_workspace_avoid_runtime_state_.has_decision = false;
+                auto_workspace_avoid_runtime_state_.last_apply_result = "waiting_sensor";
             }
             std::this_thread::sleep_until(next_tick);
             continue;
@@ -3870,12 +3992,12 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
                     current_y_m) :
                 std::hypot(plan_state.destination_x_m - current_x_m, plan_state.destination_y_m - current_y_m);
         const double target_bearing_deg = initialBearingDeg(
-            gps_state.latitude,
-            gps_state.longitude,
+            current_latitude,
+            current_longitude,
             tracking_target_latitude,
             tracking_target_longitude);
         const double heading_error_deg =
-            normalizeHeadingDifferenceDeg(target_bearing_deg - imu_state.yaw_deg);
+            normalizeHeadingDifferenceDeg(target_bearing_deg - current_yaw_deg);
 
         runtime_update.remaining_distance_m = remaining_distance_m;
         runtime_update.target_bearing_deg = target_bearing_deg;
@@ -3907,30 +4029,36 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
                 auto_workspace_runtime_state_ = runtime_update;
+                auto_workspace_avoid_runtime_state_.active = false;
+                auto_workspace_avoid_runtime_state_.has_decision = false;
+                auto_workspace_avoid_runtime_state_.last_apply_result = "arrived";
             }
             auto_workspace_control_running_.store(false);
             break;
         }
 
-        auto snapshot = autoAvoidSensorSnapshot();
+        auto snapshot = autoWorkspaceAvoidSensorSnapshot();
         const bool front_close =
             snapshot.lidar_valid &&
             snapshot.front.valid &&
             std::isfinite(snapshot.front.nearest_m) &&
-            snapshot.front.nearest_m < auto_avoid_controller_.config().avoidance_turn_max_distance_m;
+            snapshot.front.nearest_m <
+                auto_workspace_avoid_controller_.config().avoidance_turn_max_distance_m;
         const bool avoidance_active =
-            auto_avoid_controller_.currentAvoidanceStage() != AutoAvoidController::AvoidanceStage::Idle ||
+            auto_workspace_avoid_controller_.currentAvoidanceStage() !=
+                AutoAvoidController::AvoidanceStage::Idle ||
             front_close;
 
         if (avoidance_active) {
             has_last_navigation_command = false;
-            const auto command = auto_avoid_controller_.decide(snapshot);
+            const auto command = auto_workspace_avoid_controller_.decide(snapshot);
             const auto command_trace = applyAutoAvoidCommand(
                 command,
                 last_avoidance_command,
                 has_last_avoidance_command,
                 last_command_sent_steady,
                 control_cycle_id);
+            (void)command_trace;
             runtime_update.task_running = true;
             runtime_update.avoidance_active = true;
             runtime_update.phase = "avoiding";
@@ -3940,17 +4068,18 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
                 auto_workspace_runtime_state_ = runtime_update;
-                auto_avoid_runtime_state_.active = true;
-                auto_avoid_runtime_state_.has_decision = true;
-                auto_avoid_runtime_state_.last_control_cycle_id = control_cycle_id;
-                auto_avoid_runtime_state_.snapshot_valid = snapshot.lidar_valid && snapshot.imu_valid;
-                auto_avoid_runtime_state_.lidar_valid = snapshot.lidar_valid;
-                auto_avoid_runtime_state_.imu_valid = snapshot.imu_valid;
-                auto_avoid_runtime_state_.last_decision = command;
-                auto_avoid_runtime_state_.last_apply_result = command_trace.result;
+                auto_workspace_avoid_runtime_state_.active = true;
+                auto_workspace_avoid_runtime_state_.has_decision = true;
+                auto_workspace_avoid_runtime_state_.last_control_cycle_id = control_cycle_id;
+                auto_workspace_avoid_runtime_state_.snapshot_valid =
+                    snapshot.lidar_valid && snapshot.imu_valid;
+                auto_workspace_avoid_runtime_state_.lidar_valid = snapshot.lidar_valid;
+                auto_workspace_avoid_runtime_state_.imu_valid = snapshot.imu_valid;
+                auto_workspace_avoid_runtime_state_.last_decision = command;
+                auto_workspace_avoid_runtime_state_.last_apply_result = command_trace.result;
             }
         } else {
-            auto_avoid_controller_.reset();
+            auto_workspace_avoid_controller_.reset();
             has_last_avoidance_command = false;
             last_avoidance_command = AutoAvoidController::Command{};
 
@@ -3979,9 +4108,15 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
                 auto_workspace_runtime_state_ = runtime_update;
-                auto_avoid_runtime_state_.active = false;
-                auto_avoid_runtime_state_.has_decision = false;
-                auto_avoid_runtime_state_.last_apply_result = "inactive";
+                auto_workspace_avoid_runtime_state_.active = false;
+                auto_workspace_avoid_runtime_state_.has_decision = false;
+                auto_workspace_avoid_runtime_state_.last_control_cycle_id = control_cycle_id;
+                auto_workspace_avoid_runtime_state_.snapshot_valid = false;
+                auto_workspace_avoid_runtime_state_.lidar_valid = false;
+                auto_workspace_avoid_runtime_state_.imu_valid = false;
+                auto_workspace_avoid_runtime_state_.last_decision =
+                    AutoAvoidController::Command{};
+                auto_workspace_avoid_runtime_state_.last_apply_result = "inactive";
             }
         }
 
@@ -4107,14 +4242,16 @@ void LogDashboardServer::onDepthImage(const sensor_msgs::msg::Image::SharedPtr m
     depth_state_.last_message_steady_ = now;
 }
 
-void LogDashboardServer::resetLidarDisplayFilterLocked() {
-    lidar_display_filter_state_ = LidarDisplayFilterState{};
+void LogDashboardServer::resetLidarDisplayFilterLocked(
+    LidarDisplayFilterState& filter_state) {
+    filter_state = LidarDisplayFilterState{};
 }
 
 LogDashboardServer::LidarRuntimeState::SectorRuntimeState
 LogDashboardServer::filteredLidarDisplaySectorLocked(
     const LidarRuntimeState::SectorRuntimeState& sample,
-    std::deque<LidarRuntimeState::SectorRuntimeState>& history) const {
+    std::deque<LidarRuntimeState::SectorRuntimeState>& history,
+    int filter_window) const {
     const bool sample_valid =
         sample.valid &&
         std::isfinite(sample.nearest_m) &&
@@ -4125,7 +4262,6 @@ LogDashboardServer::filteredLidarDisplaySectorLocked(
     }
 
     history.push_back(sample);
-    const int filter_window = std::max(1, auto_avoid_controller_.config().lidar_filter_window);
     while (static_cast<int>(history.size()) > filter_window) {
         history.pop_front();
     }
@@ -4144,17 +4280,22 @@ LogDashboardServer::LidarRuntimeState::SectorRuntimeState
 LogDashboardServer::filterLidarDisplayFrontLocked(
     const LidarRuntimeState::SectorRuntimeState& front,
     const LidarRuntimeState::SectorRuntimeState& negative_front,
-    const LidarRuntimeState::SectorRuntimeState& positive_front) {
-    auto& filter_state = lidar_display_filter_state_;
+    const LidarRuntimeState::SectorRuntimeState& positive_front,
+    LidarDisplayFilterState& filter_state,
+    const AutoAvoidController::Config& config) {
+    const int filter_window = std::max(1, config.lidar_filter_window);
     const auto filtered_negative_front = filteredLidarDisplaySectorLocked(
         negative_front,
-        filter_state.negative_front_history);
+        filter_state.negative_front_history,
+        filter_window);
     const auto filtered_positive_front = filteredLidarDisplaySectorLocked(
         positive_front,
-        filter_state.positive_front_history);
+        filter_state.positive_front_history,
+        filter_window);
     auto filtered_front = filteredLidarDisplaySectorLocked(
         front,
-        filter_state.front_history);
+        filter_state.front_history,
+        filter_window);
 
     if (!filtered_front.valid ||
         !std::isfinite(filtered_front.nearest_m) ||
@@ -4167,7 +4308,6 @@ LogDashboardServer::filterLidarDisplayFrontLocked(
         return filtered_front;
     }
 
-    const auto& config = auto_avoid_controller_.config();
     const bool side_clear =
         (!filtered_negative_front.valid ||
             !std::isfinite(filtered_negative_front.nearest_m) ||
@@ -4225,42 +4365,72 @@ LogDashboardServer::filterLidarDisplayFrontLocked(
     return filtered_front;
 }
 
+void LogDashboardServer::updateLidarRuntimeLocked(
+    LidarRuntimeState& runtime_state,
+    LidarDisplayFilterState& filter_state,
+    const AutoAvoidInputBuilder::LidarInputFrame& lidar_input_frame,
+    const AutoAvoidController::Config& config) {
+    runtime_state.message_count += 1;
+    runtime_state.last_message_steady_ = std::chrono::steady_clock::now();
+    runtime_state.valid = lidar_input_frame.valid;
+    runtime_state.valid_points = lidar_input_frame.valid_points;
+    runtime_state.negative_front_sector = lidar_input_frame.negative_front_sector;
+    runtime_state.front_sector = lidar_input_frame.front_sector;
+    runtime_state.auto_avoid_front_sector = lidar_input_frame.auto_avoid_front_sector;
+    runtime_state.positive_front_sector = lidar_input_frame.positive_front_sector;
+    runtime_state.avoidance_buffer_sector = lidar_input_frame.avoidance_buffer_sector;
+    runtime_state.front_target_selection = lidar_input_frame.front_target_selection;
+    runtime_state.front_nearest_zone = lidar_input_frame.front_nearest_zone;
+    if (lidar_input_frame.valid) {
+        runtime_state.filtered_auto_avoid_front_sector = filterLidarDisplayFrontLocked(
+            lidar_input_frame.auto_avoid_front_sector,
+            lidar_input_frame.negative_front_sector,
+            lidar_input_frame.positive_front_sector,
+            filter_state,
+            config);
+        runtime_state.filtered_front_nearest_zone =
+            runtime_state.filtered_auto_avoid_front_sector.valid ?
+                AutoAvoidInputBuilder::frontNearestZoneFromAngle(
+                    runtime_state.filtered_auto_avoid_front_sector.nearest_angle_deg,
+                    lidar_input_frame.front_nearest_zone) :
+                lidar_input_frame.front_nearest_zone;
+    } else {
+        resetLidarDisplayFilterLocked(filter_state);
+        runtime_state.filtered_auto_avoid_front_sector = lidar_input_frame.auto_avoid_front_sector;
+        runtime_state.filtered_front_nearest_zone = lidar_input_frame.front_nearest_zone;
+    }
+}
+
 void LogDashboardServer::onLidarScan(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
     const auto now = std::chrono::steady_clock::now();
     const std::string previous_front_nearest_zone =
         auto_avoid_control_snapshot_pool_.latestFrontNearestZone();
-    const auto lidar_input_frame =
+    const auto avoidance_lidar_input_frame =
         auto_avoid_input_builder_.buildLidarInputFrame(msg, previous_front_nearest_zone);
-    auto_avoid_control_snapshot_pool_.updateLidar(lidar_input_frame, now);
+    auto_avoid_control_snapshot_pool_.updateLidar(avoidance_lidar_input_frame, now);
+    const std::string auto_workspace_previous_zone =
+        auto_workspace_avoid_control_snapshot_pool_.latestFrontNearestZone();
+    const auto auto_workspace_lidar_input_frame =
+        auto_workspace_avoid_input_builder_.buildLidarInputFrame(
+            msg,
+            auto_workspace_previous_zone);
+    auto_workspace_avoid_control_snapshot_pool_.updateLidar(
+        auto_workspace_lidar_input_frame,
+        now);
 
     std::lock_guard<std::mutex> lock(state_mutex_);
-    lidar_state_.message_count += 1;
+    updateLidarRuntimeLocked(
+        lidar_state_,
+        lidar_display_filter_state_,
+        avoidance_lidar_input_frame,
+        auto_avoid_controller_.config());
     lidar_state_.last_message_steady_ = now;
-    lidar_state_.valid = lidar_input_frame.valid;
-    lidar_state_.valid_points = lidar_input_frame.valid_points;
-    lidar_state_.negative_front_sector = lidar_input_frame.negative_front_sector;
-    lidar_state_.front_sector = lidar_input_frame.front_sector;
-    lidar_state_.auto_avoid_front_sector = lidar_input_frame.auto_avoid_front_sector;
-    lidar_state_.positive_front_sector = lidar_input_frame.positive_front_sector;
-    lidar_state_.avoidance_buffer_sector = lidar_input_frame.avoidance_buffer_sector;
-    lidar_state_.front_target_selection = lidar_input_frame.front_target_selection;
-    lidar_state_.front_nearest_zone = lidar_input_frame.front_nearest_zone;
-    if (lidar_input_frame.valid) {
-        lidar_state_.filtered_auto_avoid_front_sector = filterLidarDisplayFrontLocked(
-            lidar_input_frame.auto_avoid_front_sector,
-            lidar_input_frame.negative_front_sector,
-            lidar_input_frame.positive_front_sector);
-        lidar_state_.filtered_front_nearest_zone =
-            lidar_state_.filtered_auto_avoid_front_sector.valid ?
-                AutoAvoidInputBuilder::frontNearestZoneFromAngle(
-                    lidar_state_.filtered_auto_avoid_front_sector.nearest_angle_deg,
-                    lidar_input_frame.front_nearest_zone) :
-                lidar_input_frame.front_nearest_zone;
-    } else {
-        resetLidarDisplayFilterLocked();
-        lidar_state_.filtered_auto_avoid_front_sector = lidar_input_frame.auto_avoid_front_sector;
-        lidar_state_.filtered_front_nearest_zone = lidar_input_frame.front_nearest_zone;
-    }
+    updateLidarRuntimeLocked(
+        auto_workspace_lidar_state_,
+        auto_workspace_lidar_display_filter_state_,
+        auto_workspace_lidar_input_frame,
+        auto_workspace_avoid_controller_.config());
+    auto_workspace_lidar_state_.last_message_steady_ = now;
 }
 
 void LogDashboardServer::onImu(const sensor_msgs::msg::Imu::SharedPtr msg) {
@@ -4271,6 +4441,12 @@ void LogDashboardServer::onImu(const sensor_msgs::msg::Imu::SharedPtr msg) {
     double yaw_deg = 0.0;
     if (!msg) {
         auto_avoid_control_snapshot_pool_.updateImu(
+            false,
+            roll_deg,
+            pitch_deg,
+            yaw_deg,
+            now);
+        auto_workspace_avoid_control_snapshot_pool_.updateImu(
             false,
             roll_deg,
             pitch_deg,
@@ -4308,6 +4484,12 @@ void LogDashboardServer::onImu(const sensor_msgs::msg::Imu::SharedPtr msg) {
             pitch_deg,
             yaw_deg,
             now);
+        auto_workspace_avoid_control_snapshot_pool_.updateImu(
+            has_attitude,
+            roll_deg,
+            pitch_deg,
+            yaw_deg,
+            now);
     }
 
     std::lock_guard<std::mutex> lock(state_mutex_);
@@ -4317,6 +4499,35 @@ void LogDashboardServer::onImu(const sensor_msgs::msg::Imu::SharedPtr msg) {
     imu_state_.pitch_deg = pitch_deg;
     imu_state_.yaw_deg = yaw_deg;
     imu_state_.has_attitude = has_attitude;
+    auto_workspace_imu_state_.message_count += 1;
+    auto_workspace_imu_state_.last_message_steady_ = now;
+    auto_workspace_imu_state_.roll_deg = roll_deg;
+    auto_workspace_imu_state_.pitch_deg = pitch_deg;
+    auto_workspace_imu_state_.yaw_deg = yaw_deg;
+    auto_workspace_imu_state_.has_attitude = has_attitude;
+    if (auto_workspace_gps_filter_state_.heading_offset_valid) {
+        auto_workspace_gps_state_.heading_valid = has_attitude;
+        auto_workspace_gps_state_.heading_deg =
+            normalizeHeadingDifferenceDeg(
+                yaw_deg + auto_workspace_gps_filter_state_.heading_offset_deg);
+        auto_workspace_gps_state_.heading_source =
+            auto_workspace_gps_filter_state_.heading_source;
+        if (auto_workspace_gps_state_.filtered_valid) {
+            const auto [gps_offset_x_m, gps_offset_y_m] = planarOffsetFromBodyFrameMeters(
+                auto_workspace_gps_state_.heading_deg,
+                kAutoWorkspaceGpsOffsetXM,
+                kAutoWorkspaceGpsOffsetYM);
+            const auto [base_link_latitude, base_link_longitude] =
+                latLonFromLocalPlanarOffsetMeters(
+                    auto_workspace_gps_filter_state_.anchor_latitude,
+                    auto_workspace_gps_filter_state_.anchor_longitude,
+                    auto_workspace_gps_filter_state_.filtered_x_m - gps_offset_x_m,
+                    auto_workspace_gps_filter_state_.filtered_y_m - gps_offset_y_m);
+            auto_workspace_gps_state_.base_link_valid = true;
+            auto_workspace_gps_state_.base_link_latitude = base_link_latitude;
+            auto_workspace_gps_state_.base_link_longitude = base_link_longitude;
+        }
+    }
 }
 
 void LogDashboardServer::resetGpsFilterLocked() {
@@ -4325,6 +4536,20 @@ void LogDashboardServer::resetGpsFilterLocked() {
     gps_state_.origin_stable = false;
     gps_state_.origin_stability_radius_m = 0.0;
     gps_state_.origin_stability_samples = 0;
+}
+
+void LogDashboardServer::resetAutoWorkspaceGpsFilterLocked() {
+    auto_workspace_gps_filter_state_ = GpsFilterState {};
+    auto_workspace_gps_state_.filtered_valid = false;
+    auto_workspace_gps_state_.origin_stable = false;
+    auto_workspace_gps_state_.origin_stability_radius_m = 0.0;
+    auto_workspace_gps_state_.origin_stability_samples = 0;
+    auto_workspace_gps_state_.heading_valid = false;
+    auto_workspace_gps_state_.heading_deg = 0.0;
+    auto_workspace_gps_state_.heading_source.clear();
+    auto_workspace_gps_state_.base_link_valid = false;
+    auto_workspace_gps_state_.base_link_latitude = 0.0;
+    auto_workspace_gps_state_.base_link_longitude = 0.0;
 }
 
 void LogDashboardServer::updateFilteredGpsLocked(
@@ -4471,6 +4696,275 @@ void LogDashboardServer::updateFilteredGpsLocked(
     }
 }
 
+void LogDashboardServer::updateAutoWorkspaceHeadingFromRouteLocked(double route_bearing_deg) {
+    const auto now = std::chrono::steady_clock::now();
+    const bool imu_valid =
+        auto_workspace_imu_state_.has_attitude &&
+        auto_workspace_imu_state_.message_count > 0 &&
+        (now - auto_workspace_imu_state_.last_message_steady_) <= kSensorFreshWindow &&
+        std::isfinite(auto_workspace_imu_state_.yaw_deg) &&
+        std::isfinite(route_bearing_deg);
+    if (!imu_valid) {
+        return;
+    }
+
+    auto_workspace_gps_filter_state_.heading_offset_valid = true;
+    auto_workspace_gps_filter_state_.heading_offset_deg =
+        normalizeHeadingDifferenceDeg(route_bearing_deg - auto_workspace_imu_state_.yaw_deg);
+    auto_workspace_gps_filter_state_.heading_source = "route_seed";
+    auto_workspace_gps_state_.heading_valid = true;
+    auto_workspace_gps_state_.heading_deg =
+        normalizeHeadingDifferenceDeg(
+            auto_workspace_imu_state_.yaw_deg +
+            auto_workspace_gps_filter_state_.heading_offset_deg);
+    auto_workspace_gps_state_.heading_source = auto_workspace_gps_filter_state_.heading_source;
+
+    if (auto_workspace_gps_state_.filtered_valid) {
+        const auto [gps_offset_x_m, gps_offset_y_m] = planarOffsetFromBodyFrameMeters(
+            auto_workspace_gps_state_.heading_deg,
+            kAutoWorkspaceGpsOffsetXM,
+            kAutoWorkspaceGpsOffsetYM);
+        const auto [base_link_latitude, base_link_longitude] =
+            latLonFromLocalPlanarOffsetMeters(
+                auto_workspace_gps_filter_state_.anchor_latitude,
+                auto_workspace_gps_filter_state_.anchor_longitude,
+                auto_workspace_gps_filter_state_.filtered_x_m - gps_offset_x_m,
+                auto_workspace_gps_filter_state_.filtered_y_m - gps_offset_y_m);
+        auto_workspace_gps_state_.base_link_valid = true;
+        auto_workspace_gps_state_.base_link_latitude = base_link_latitude;
+        auto_workspace_gps_state_.base_link_longitude = base_link_longitude;
+    }
+}
+
+void LogDashboardServer::updateAutoWorkspaceFilteredGpsLocked(
+    double latitude,
+    double longitude,
+    double altitude,
+    double horizontal_stddev_m,
+    const std::chrono::steady_clock::time_point& now) {
+    if (!auto_workspace_gps_filter_state_.anchor_valid) {
+        auto_workspace_gps_filter_state_.anchor_valid = true;
+        auto_workspace_gps_filter_state_.anchor_latitude = latitude;
+        auto_workspace_gps_filter_state_.anchor_longitude = longitude;
+    }
+
+    const auto [raw_x_m, raw_y_m] = localPlanarOffsetMeters(
+        auto_workspace_gps_filter_state_.anchor_latitude,
+        auto_workspace_gps_filter_state_.anchor_longitude,
+        latitude,
+        longitude);
+
+    GpsFilterSample raw_sample;
+    raw_sample.x_m = raw_x_m;
+    raw_sample.y_m = raw_y_m;
+    raw_sample.altitude_m = altitude;
+    raw_sample.horizontal_stddev_m = horizontal_stddev_m;
+    auto_workspace_gps_filter_state_.raw_window.push_back(raw_sample);
+    while (auto_workspace_gps_filter_state_.raw_window.size() > kGpsMedianWindowSize) {
+        auto_workspace_gps_filter_state_.raw_window.pop_front();
+    }
+
+    std::vector<double> recent_x_m;
+    std::vector<double> recent_y_m;
+    std::vector<double> recent_altitude_m;
+    std::vector<double> recent_horizontal_stddev_m;
+    recent_x_m.reserve(auto_workspace_gps_filter_state_.raw_window.size());
+    recent_y_m.reserve(auto_workspace_gps_filter_state_.raw_window.size());
+    recent_altitude_m.reserve(auto_workspace_gps_filter_state_.raw_window.size());
+    recent_horizontal_stddev_m.reserve(auto_workspace_gps_filter_state_.raw_window.size());
+    for (const auto& sample : auto_workspace_gps_filter_state_.raw_window) {
+        recent_x_m.push_back(sample.x_m);
+        recent_y_m.push_back(sample.y_m);
+        recent_altitude_m.push_back(sample.altitude_m);
+        if (std::isfinite(sample.horizontal_stddev_m) && sample.horizontal_stddev_m > 0.0) {
+            recent_horizontal_stddev_m.push_back(sample.horizontal_stddev_m);
+        }
+    }
+
+    const double median_x_m = medianValue(recent_x_m);
+    const double median_y_m = medianValue(recent_y_m);
+    const double median_altitude_m = medianValue(recent_altitude_m);
+    const double filtered_horizontal_stddev_m =
+        recent_horizontal_stddev_m.empty() ?
+            horizontal_stddev_m :
+            medianValue(recent_horizontal_stddev_m);
+
+    if (!auto_workspace_gps_filter_state_.filtered_valid) {
+        auto_workspace_gps_filter_state_.filtered_x_m = median_x_m;
+        auto_workspace_gps_filter_state_.filtered_y_m = median_y_m;
+        auto_workspace_gps_filter_state_.filtered_altitude_m = median_altitude_m;
+        auto_workspace_gps_filter_state_.filtered_valid = true;
+    } else {
+        auto_workspace_gps_filter_state_.filtered_x_m +=
+            (median_x_m - auto_workspace_gps_filter_state_.filtered_x_m) * kGpsFilterEmaAlpha;
+        auto_workspace_gps_filter_state_.filtered_y_m +=
+            (median_y_m - auto_workspace_gps_filter_state_.filtered_y_m) * kGpsFilterEmaAlpha;
+        auto_workspace_gps_filter_state_.filtered_altitude_m +=
+            (median_altitude_m - auto_workspace_gps_filter_state_.filtered_altitude_m) * kGpsFilterEmaAlpha;
+    }
+
+    GpsFilterSample filtered_sample;
+    filtered_sample.x_m = auto_workspace_gps_filter_state_.filtered_x_m;
+    filtered_sample.y_m = auto_workspace_gps_filter_state_.filtered_y_m;
+    filtered_sample.altitude_m = auto_workspace_gps_filter_state_.filtered_altitude_m;
+    filtered_sample.horizontal_stddev_m = filtered_horizontal_stddev_m;
+    auto_workspace_gps_filter_state_.filtered_window.push_back(filtered_sample);
+    while (auto_workspace_gps_filter_state_.filtered_window.size() > kGpsOriginStabilityWindowSize) {
+        auto_workspace_gps_filter_state_.filtered_window.pop_front();
+    }
+
+    const auto [filtered_latitude, filtered_longitude] = latLonFromLocalPlanarOffsetMeters(
+        auto_workspace_gps_filter_state_.anchor_latitude,
+        auto_workspace_gps_filter_state_.anchor_longitude,
+        auto_workspace_gps_filter_state_.filtered_x_m,
+        auto_workspace_gps_filter_state_.filtered_y_m);
+
+    auto_workspace_gps_state_.filtered_valid = true;
+    auto_workspace_gps_state_.latitude = filtered_latitude;
+    auto_workspace_gps_state_.longitude = filtered_longitude;
+    auto_workspace_gps_state_.altitude = auto_workspace_gps_filter_state_.filtered_altitude_m;
+    auto_workspace_gps_state_.horizontal_stddev_m = filtered_horizontal_stddev_m;
+
+    double centroid_x_m = 0.0;
+    double centroid_y_m = 0.0;
+    double centroid_altitude_m = 0.0;
+    double cluster_radius_m = 0.0;
+    double mean_horizontal_stddev_m = 0.0;
+    std::size_t accuracy_sample_count = 0;
+    for (const auto& sample : auto_workspace_gps_filter_state_.filtered_window) {
+        centroid_x_m += sample.x_m;
+        centroid_y_m += sample.y_m;
+        centroid_altitude_m += sample.altitude_m;
+        if (std::isfinite(sample.horizontal_stddev_m) && sample.horizontal_stddev_m > 0.0) {
+            mean_horizontal_stddev_m += sample.horizontal_stddev_m;
+            ++accuracy_sample_count;
+        }
+    }
+    if (!auto_workspace_gps_filter_state_.filtered_window.empty()) {
+        centroid_x_m /= static_cast<double>(auto_workspace_gps_filter_state_.filtered_window.size());
+        centroid_y_m /= static_cast<double>(auto_workspace_gps_filter_state_.filtered_window.size());
+        centroid_altitude_m /= static_cast<double>(auto_workspace_gps_filter_state_.filtered_window.size());
+        for (const auto& sample : auto_workspace_gps_filter_state_.filtered_window) {
+            cluster_radius_m = std::max(
+                cluster_radius_m,
+                std::hypot(sample.x_m - centroid_x_m, sample.y_m - centroid_y_m));
+        }
+    }
+    if (accuracy_sample_count > 0) {
+        mean_horizontal_stddev_m /= static_cast<double>(accuracy_sample_count);
+    }
+
+    auto_workspace_gps_state_.origin_stability_radius_m = cluster_radius_m;
+    auto_workspace_gps_state_.origin_stability_samples =
+        auto_workspace_gps_filter_state_.filtered_window.size();
+
+    const bool enough_samples =
+        auto_workspace_gps_filter_state_.filtered_window.size() >= kGpsOriginStabilityWindowSize;
+    const bool accuracy_ok =
+        accuracy_sample_count == 0 ||
+        mean_horizontal_stddev_m <= kGpsOriginStableHorizontalStdDevM;
+    const bool origin_stable =
+        enough_samples &&
+        accuracy_ok &&
+        cluster_radius_m <= kGpsOriginStableRadiusM;
+    auto_workspace_gps_state_.origin_stable = origin_stable;
+
+    if (origin_stable && !auto_workspace_local_frame_state_.valid) {
+        const auto [origin_latitude, origin_longitude] = latLonFromLocalPlanarOffsetMeters(
+            auto_workspace_gps_filter_state_.anchor_latitude,
+            auto_workspace_gps_filter_state_.anchor_longitude,
+            centroid_x_m,
+            centroid_y_m);
+        auto_workspace_local_frame_state_.valid = true;
+        auto_workspace_local_frame_state_.origin_latitude = origin_latitude;
+        auto_workspace_local_frame_state_.origin_longitude = origin_longitude;
+        auto_workspace_local_frame_state_.origin_altitude = centroid_altitude_m;
+    }
+
+    const bool imu_valid =
+        auto_workspace_imu_state_.has_attitude &&
+        auto_workspace_imu_state_.message_count > 0 &&
+        (now - auto_workspace_imu_state_.last_message_steady_) <= kSensorFreshWindow &&
+        std::isfinite(auto_workspace_imu_state_.yaw_deg);
+    if (imu_valid) {
+        if (!auto_workspace_gps_filter_state_.course_anchor_valid) {
+            auto_workspace_gps_filter_state_.course_anchor_valid = true;
+            auto_workspace_gps_filter_state_.course_anchor_x_m =
+                auto_workspace_gps_filter_state_.filtered_x_m;
+            auto_workspace_gps_filter_state_.course_anchor_y_m =
+                auto_workspace_gps_filter_state_.filtered_y_m;
+        } else {
+            const double dx_m =
+                auto_workspace_gps_filter_state_.filtered_x_m -
+                auto_workspace_gps_filter_state_.course_anchor_x_m;
+            const double dy_m =
+                auto_workspace_gps_filter_state_.filtered_y_m -
+                auto_workspace_gps_filter_state_.course_anchor_y_m;
+            const double travel_m = std::hypot(dx_m, dy_m);
+            if (travel_m >= kAutoWorkspaceHeadingCourseMinTravelM) {
+                const double course_bearing_deg = planarBearingDeg(dx_m, dy_m);
+                const double measured_offset_deg = normalizeHeadingDifferenceDeg(
+                    course_bearing_deg - auto_workspace_imu_state_.yaw_deg);
+                if (!auto_workspace_gps_filter_state_.heading_offset_valid) {
+                    auto_workspace_gps_filter_state_.heading_offset_deg = measured_offset_deg;
+                } else {
+                    const double offset_delta_deg = normalizeHeadingDifferenceDeg(
+                        measured_offset_deg - auto_workspace_gps_filter_state_.heading_offset_deg);
+                    auto_workspace_gps_filter_state_.heading_offset_deg =
+                        normalizeHeadingDifferenceDeg(
+                            auto_workspace_gps_filter_state_.heading_offset_deg +
+                            offset_delta_deg * kAutoWorkspaceHeadingOffsetEmaAlpha);
+                }
+                auto_workspace_gps_filter_state_.heading_offset_valid = true;
+                auto_workspace_gps_filter_state_.heading_source = "gps_course";
+                auto_workspace_gps_filter_state_.course_anchor_x_m =
+                    auto_workspace_gps_filter_state_.filtered_x_m;
+                auto_workspace_gps_filter_state_.course_anchor_y_m =
+                    auto_workspace_gps_filter_state_.filtered_y_m;
+            }
+        }
+    } else {
+        auto_workspace_gps_filter_state_.course_anchor_valid = false;
+    }
+
+    const bool heading_valid =
+        imu_valid && auto_workspace_gps_filter_state_.heading_offset_valid;
+    auto_workspace_gps_state_.heading_valid = heading_valid;
+    auto_workspace_gps_state_.heading_source =
+        heading_valid ? auto_workspace_gps_filter_state_.heading_source : "";
+    if (heading_valid) {
+        auto_workspace_gps_state_.heading_deg =
+            normalizeHeadingDifferenceDeg(
+                auto_workspace_imu_state_.yaw_deg +
+                auto_workspace_gps_filter_state_.heading_offset_deg);
+    }
+
+    const bool pose_heading_valid = imu_valid;
+    if (pose_heading_valid) {
+        const double pose_heading_deg =
+            heading_valid ?
+                auto_workspace_gps_state_.heading_deg :
+                normalizeHeadingDifferenceDeg(auto_workspace_imu_state_.yaw_deg);
+        const auto [gps_offset_x_m, gps_offset_y_m] = planarOffsetFromBodyFrameMeters(
+            pose_heading_deg,
+            kAutoWorkspaceGpsOffsetXM,
+            kAutoWorkspaceGpsOffsetYM);
+        const auto [base_link_latitude, base_link_longitude] =
+            latLonFromLocalPlanarOffsetMeters(
+                auto_workspace_gps_filter_state_.anchor_latitude,
+                auto_workspace_gps_filter_state_.anchor_longitude,
+                auto_workspace_gps_filter_state_.filtered_x_m - gps_offset_x_m,
+                auto_workspace_gps_filter_state_.filtered_y_m - gps_offset_y_m);
+        auto_workspace_gps_state_.base_link_valid = true;
+        auto_workspace_gps_state_.base_link_latitude = base_link_latitude;
+        auto_workspace_gps_state_.base_link_longitude = base_link_longitude;
+    } else {
+        auto_workspace_gps_state_.base_link_valid = false;
+        auto_workspace_gps_state_.base_link_latitude = 0.0;
+        auto_workspace_gps_state_.base_link_longitude = 0.0;
+    }
+}
+
 void LogDashboardServer::onGpsFix(const sensor_msgs::msg::NavSatFix::SharedPtr msg) {
     const auto now = std::chrono::steady_clock::now();
     const int status = msg ? msg->status.status : -1;
@@ -4492,6 +4986,11 @@ void LogDashboardServer::onGpsFix(const sensor_msgs::msg::NavSatFix::SharedPtr m
 
     if (!valid_fix_position) {
         resetGpsFilterLocked();
+        auto_workspace_gps_state_.message_count += 1;
+        auto_workspace_gps_state_.last_message_steady_ = now;
+        auto_workspace_gps_state_.status = status;
+        auto_workspace_gps_state_.has_position = has_position;
+        resetAutoWorkspaceGpsFilterLocked();
         return;
     }
 
@@ -4510,6 +5009,21 @@ void LogDashboardServer::onGpsFix(const sensor_msgs::msg::NavSatFix::SharedPtr m
         msg->longitude,
         std::isfinite(msg->altitude) ? msg->altitude : 0.0,
         horizontal_stddev_m);
+
+    auto_workspace_gps_state_.message_count += 1;
+    auto_workspace_gps_state_.last_message_steady_ = now;
+    auto_workspace_gps_state_.status = status;
+    auto_workspace_gps_state_.has_position = has_position;
+    auto_workspace_gps_state_.raw_latitude = msg->latitude;
+    auto_workspace_gps_state_.raw_longitude = msg->longitude;
+    auto_workspace_gps_state_.raw_altitude =
+        std::isfinite(msg->altitude) ? msg->altitude : 0.0;
+    updateAutoWorkspaceFilteredGpsLocked(
+        msg->latitude,
+        msg->longitude,
+        std::isfinite(msg->altitude) ? msg->altitude : 0.0,
+        horizontal_stddev_m,
+        now);
 }
 
 void LogDashboardServer::onRgbYolo(const std_msgs::msg::String::SharedPtr msg) {
@@ -4531,8 +5045,11 @@ std::string LogDashboardServer::stateJson() const {
 
     DepthRuntimeState depth_state;
     LidarRuntimeState lidar_state;
+    LidarRuntimeState auto_workspace_lidar_state;
     ImuRuntimeState imu_state;
     GpsRuntimeState gps_state;
+    ImuRuntimeState auto_workspace_imu_state;
+    GpsRuntimeState auto_workspace_gps_state;
     std::string live_rgb_yolo_payload;
     std::chrono::steady_clock::time_point rgb_yolo_received_steady;
     std::string active_workspace_mode;
@@ -4547,8 +5064,11 @@ std::string LogDashboardServer::stateJson() const {
         std::lock_guard<std::mutex> lock(state_mutex_);
         depth_state = depth_state_;
         lidar_state = lidar_state_;
+        auto_workspace_lidar_state = auto_workspace_lidar_state_;
         imu_state = imu_state_;
         gps_state = gps_state_;
+        auto_workspace_imu_state = auto_workspace_imu_state_;
+        auto_workspace_gps_state = auto_workspace_gps_state_;
         live_rgb_yolo_payload = latest_rgb_yolo_payload_;
         rgb_yolo_received_steady = latest_rgb_yolo_received_steady_;
         active_workspace_mode = active_workspace_mode_;
@@ -4560,6 +5080,36 @@ std::string LogDashboardServer::stateJson() const {
         auto_workspace_runtime_state = auto_workspace_runtime_state_;
         auto_workspace_local_frame_state = auto_workspace_local_frame_state_;
     }
+
+    const bool common_auto_workspace = active_workspace_mode == "AUTO";
+    const auto& common_lidar_state =
+        common_auto_workspace ? auto_workspace_lidar_state : lidar_state;
+    const auto& common_imu_state =
+        common_auto_workspace ? auto_workspace_imu_state : imu_state;
+    const auto& common_gps_state =
+        common_auto_workspace ? auto_workspace_gps_state : gps_state;
+    const bool common_origin_lock_ready =
+        common_auto_workspace ?
+            auto_workspace_gps_state.origin_stable :
+            gps_state.origin_stable;
+    const double common_origin_lock_radius_m =
+        common_auto_workspace ?
+            auto_workspace_gps_state.origin_stability_radius_m :
+            gps_state.origin_stability_radius_m;
+    const std::size_t common_origin_lock_samples =
+        common_auto_workspace ?
+            auto_workspace_gps_state.origin_stability_samples :
+            gps_state.origin_stability_samples;
+    const bool common_base_link_valid =
+        common_auto_workspace && common_gps_state.base_link_valid;
+    const double common_gps_latitude =
+        common_base_link_valid ?
+            common_gps_state.base_link_latitude :
+            common_gps_state.latitude;
+    const double common_gps_longitude =
+        common_base_link_valid ?
+            common_gps_state.base_link_longitude :
+            common_gps_state.longitude;
 
     const auto classifyTopicState =
         [&](const auto& topic_state,
@@ -4582,15 +5132,18 @@ std::string LogDashboardServer::stateJson() const {
         if (!stack_process.running) {
             return deviceStateJson("not_started", "未启动");
         }
-        if (gps_state.message_count > 0 &&
-            (now_steady - gps_state.last_message_steady_) <= kSensorFreshWindow) {
-            if (gps_state.status >= 0 && gps_state.filtered_valid) {
-                if (auto_workspace_local_frame_state.valid) {
+        if (common_gps_state.message_count > 0 &&
+            (now_steady - common_gps_state.last_message_steady_) <= kSensorFreshWindow) {
+            if (common_gps_state.status >= 0 && common_gps_state.filtered_valid) {
+                if (common_auto_workspace && auto_workspace_local_frame_state.valid) {
+                    return deviceStateJson("started", "已启动 / FIX 稳定");
+                }
+                if (!common_auto_workspace && gps_state.origin_stable) {
                     return deviceStateJson("started", "已启动 / FIX 稳定");
                 }
                 return deviceStateJson("started", "已启动 / FIX 收敛中");
             }
-            if (gps_state.status >= 0) {
+            if (common_gps_state.status >= 0) {
                 return deviceStateJson("started", "已启动 / FIX");
             }
             return deviceStateJson("started", "已启动 / 无 FIX");
@@ -4677,17 +5230,33 @@ std::string LogDashboardServer::stateJson() const {
 
     const bool gps_key_valid =
         stack_process.running &&
-        gps_state.filtered_valid &&
-        gps_state.status >= 0 &&
-        gps_state.message_count > 0 &&
-        (now_steady - gps_state.last_message_steady_) <= kSensorFreshWindow;
+        common_gps_state.filtered_valid &&
+        common_gps_state.status >= 0 &&
+        common_gps_state.message_count > 0 &&
+        (now_steady - common_gps_state.last_message_steady_) <= kSensorFreshWindow &&
+        std::isfinite(common_gps_latitude) &&
+        std::isfinite(common_gps_longitude);
     const bool imu_key_valid =
         stack_process.running &&
-        imu_state.has_attitude &&
-        imu_state.message_count > 0 &&
-        (now_steady - imu_state.last_message_steady_) <= kSensorFreshWindow;
+        common_imu_state.has_attitude &&
+        common_imu_state.message_count > 0 &&
+        (now_steady - common_imu_state.last_message_steady_) <= kSensorFreshWindow;
+    const bool auto_workspace_gps_valid =
+        stack_process.running &&
+        auto_workspace_gps_state.filtered_valid &&
+        auto_workspace_gps_state.status >= 0 &&
+        auto_workspace_gps_state.message_count > 0 &&
+        (now_steady - auto_workspace_gps_state.last_message_steady_) <= kSensorFreshWindow &&
+        auto_workspace_gps_state.base_link_valid;
+    const bool auto_workspace_imu_valid =
+        stack_process.running &&
+        auto_workspace_imu_state.has_attitude &&
+        auto_workspace_imu_state.message_count > 0 &&
+        (now_steady - auto_workspace_imu_state.last_message_steady_) <= kSensorFreshWindow;
+    const bool auto_workspace_heading_valid =
+        auto_workspace_imu_valid && auto_workspace_gps_state.heading_valid;
     const bool auto_workspace_origin_valid = auto_workspace_local_frame_state.valid;
-    const bool auto_workspace_local_valid = gps_key_valid && auto_workspace_origin_valid;
+    const bool auto_workspace_local_valid = auto_workspace_gps_valid && auto_workspace_origin_valid;
     double auto_workspace_current_x_m = auto_workspace_runtime_state.current_x_m;
     double auto_workspace_current_y_m = auto_workspace_runtime_state.current_y_m;
     if (auto_workspace_local_valid) {
@@ -4695,8 +5264,8 @@ std::string LogDashboardServer::stateJson() const {
             localPlanarOffsetMeters(
                 auto_workspace_local_frame_state.origin_latitude,
                 auto_workspace_local_frame_state.origin_longitude,
-                gps_state.latitude,
-                gps_state.longitude);
+                auto_workspace_gps_state.base_link_latitude,
+                auto_workspace_gps_state.base_link_longitude);
     }
     const auto auto_workspace_path_json = [&]() {
         std::ostringstream path_out;
@@ -4725,8 +5294,8 @@ std::string LogDashboardServer::stateJson() const {
         << "},"
         << "\"devices\":{"
         << "\"gps\":" << classifyGpsState() << ","
-        << "\"imu\":" << classifyTopicState(imu_state, "已启动 / IMU 数据正常", "启动出错 / 未收到 IMU 数据") << ","
-        << "\"lidar\":" << classifyTopicState(lidar_state, "已启动 / 雷达扫描正常", "启动出错 / 未收到雷达数据") << ","
+        << "\"imu\":" << classifyTopicState(common_imu_state, "已启动 / IMU 数据正常", "启动出错 / 未收到 IMU 数据") << ","
+        << "\"lidar\":" << classifyTopicState(common_lidar_state, "已启动 / 雷达扫描正常", "启动出错 / 未收到雷达数据") << ","
         << "\"depth_camera\":" << classifyTopicState(depth_state, "已启动 / 深度流正常", "启动出错 / 未收到深度图") << ","
         << "\"rgb_yolo\":" << classifyRgbYoloState() << ","
         << "\"stm32\":" << classifyStm32State()
@@ -4734,26 +5303,26 @@ std::string LogDashboardServer::stateJson() const {
         << "\"key_display\":{"
         << "\"gps\":{"
         << "\"valid\":" << boolJson(gps_key_valid) << ","
-        << "\"fix\":" << boolJson(gps_key_valid && gps_state.status >= 0) << ","
-        << "\"latitude\":" << (gps_key_valid ? numberJson(gps_state.latitude, 7) : "null") << ","
-        << "\"longitude\":" << (gps_key_valid ? numberJson(gps_state.longitude, 7) : "null") << ","
-        << "\"altitude_m\":" << (gps_key_valid ? numberJson(gps_state.altitude, 2) : "null") << ","
-        << "\"raw_latitude\":" << (gps_state.has_position ? numberJson(gps_state.raw_latitude, 7) : "null") << ","
-        << "\"raw_longitude\":" << (gps_state.has_position ? numberJson(gps_state.raw_longitude, 7) : "null") << ","
-        << "\"raw_altitude_m\":" << (gps_state.has_position ? numberJson(gps_state.raw_altitude, 2) : "null") << ","
+        << "\"fix\":" << boolJson(gps_key_valid && common_gps_state.status >= 0) << ","
+        << "\"latitude\":" << (gps_key_valid ? numberJson(common_gps_latitude, 7) : "null") << ","
+        << "\"longitude\":" << (gps_key_valid ? numberJson(common_gps_longitude, 7) : "null") << ","
+        << "\"altitude_m\":" << (gps_key_valid ? numberJson(common_gps_state.altitude, 2) : "null") << ","
+        << "\"raw_latitude\":" << (common_gps_state.has_position ? numberJson(common_gps_state.raw_latitude, 7) : "null") << ","
+        << "\"raw_longitude\":" << (common_gps_state.has_position ? numberJson(common_gps_state.raw_longitude, 7) : "null") << ","
+        << "\"raw_altitude_m\":" << (common_gps_state.has_position ? numberJson(common_gps_state.raw_altitude, 2) : "null") << ","
         << "\"horizontal_stddev_m\":" <<
-            (gps_key_valid && std::isfinite(gps_state.horizontal_stddev_m) ?
-                numberJson(gps_state.horizontal_stddev_m, 2) :
+            (gps_key_valid && std::isfinite(common_gps_state.horizontal_stddev_m) ?
+                numberJson(common_gps_state.horizontal_stddev_m, 2) :
                 "null") << ","
-        << "\"origin_lock_ready\":" << boolJson(gps_state.origin_stable) << ","
-        << "\"origin_lock_radius_m\":" << numberJson(gps_state.origin_stability_radius_m, 3) << ","
-        << "\"origin_lock_samples\":" << gps_state.origin_stability_samples
+        << "\"origin_lock_ready\":" << boolJson(common_origin_lock_ready) << ","
+        << "\"origin_lock_radius_m\":" << numberJson(common_origin_lock_radius_m, 3) << ","
+        << "\"origin_lock_samples\":" << common_origin_lock_samples
         << "},"
         << "\"imu\":{"
         << "\"valid\":" << boolJson(imu_key_valid) << ","
-        << "\"roll_deg\":" << (imu_key_valid ? numberJson(imu_state.roll_deg, 1) : "null") << ","
-        << "\"pitch_deg\":" << (imu_key_valid ? numberJson(imu_state.pitch_deg, 1) : "null") << ","
-        << "\"yaw_deg\":" << (imu_key_valid ? numberJson(imu_state.yaw_deg, 1) : "null")
+        << "\"roll_deg\":" << (imu_key_valid ? numberJson(common_imu_state.roll_deg, 1) : "null") << ","
+        << "\"pitch_deg\":" << (imu_key_valid ? numberJson(common_imu_state.pitch_deg, 1) : "null") << ","
+        << "\"yaw_deg\":" << (imu_key_valid ? numberJson(common_imu_state.yaw_deg, 1) : "null")
         << "},"
         << "\"vehicle\":{"
         << "\"speed_valid\":" << boolJson(vehicle_command_state.has_speed) << ","
@@ -5115,8 +5684,9 @@ std::string LogDashboardServer::stateJson() const {
         << "\"plan_ready\":" << boolJson(auto_workspace_plan_state.valid) << ","
         << "\"awaiting_start_ack\":" << boolJson(auto_workspace_runtime_state.awaiting_start_ack) << ","
         << "\"task_running\":" << boolJson(auto_workspace_runtime_state.task_running) << ","
-        << "\"gps_valid\":" << boolJson(gps_key_valid) << ","
-        << "\"imu_valid\":" << boolJson(imu_key_valid) << ","
+        << "\"gps_valid\":" << boolJson(auto_workspace_gps_valid) << ","
+        << "\"imu_valid\":" << boolJson(auto_workspace_imu_valid) << ","
+        << "\"heading_valid\":" << boolJson(auto_workspace_heading_valid) << ","
         << "\"local_frame_valid\":" << boolJson(auto_workspace_local_valid) << ","
         << "\"origin_valid\":" << boolJson(auto_workspace_origin_valid) << ","
         << "\"avoidance_active\":" << boolJson(auto_workspace_runtime_state.avoidance_active) << ","
@@ -5125,10 +5695,23 @@ std::string LogDashboardServer::stateJson() const {
         << "\"message\":\"" << jsonEscape(auto_workspace_runtime_state.message) << "\","
         << "\"planner\":\"" << jsonEscape(auto_workspace_plan_state.planner) << "\","
         << "\"route_provider\":\"" << jsonEscape(auto_workspace_plan_state.route_provider) << "\","
+        << "\"heading_source\":\"" << jsonEscape(auto_workspace_runtime_state.heading_source) << "\","
         << "\"control_cycle_id\":" << auto_workspace_runtime_state.last_control_cycle_id << ","
         << "\"active_path_index\":" << auto_workspace_runtime_state.active_path_index << ","
+        << "\"current_latitude\":" << (
+                auto_workspace_gps_valid ?
+                    numberJson(auto_workspace_gps_state.base_link_latitude, 7) :
+                    "null") << ","
+        << "\"current_longitude\":" << (
+                auto_workspace_gps_valid ?
+                    numberJson(auto_workspace_gps_state.base_link_longitude, 7) :
+                    "null") << ","
         << "\"current_x_m\":" << numberJson(auto_workspace_current_x_m, 3) << ","
         << "\"current_y_m\":" << numberJson(auto_workspace_current_y_m, 3) << ","
+        << "\"current_yaw_deg\":" << (
+                auto_workspace_heading_valid ?
+                    numberJson(auto_workspace_gps_state.heading_deg, 2) :
+                    "null") << ","
         << "\"origin_latitude\":" << (
                 auto_workspace_origin_valid ?
                     numberJson(auto_workspace_local_frame_state.origin_latitude, 7) :
@@ -5141,9 +5724,9 @@ std::string LogDashboardServer::stateJson() const {
                 auto_workspace_origin_valid ?
                     numberJson(auto_workspace_local_frame_state.origin_altitude, 2) :
                     "null") << ","
-        << "\"origin_lock_ready\":" << boolJson(gps_state.origin_stable) << ","
-        << "\"origin_lock_radius_m\":" << numberJson(gps_state.origin_stability_radius_m, 3) << ","
-        << "\"origin_lock_samples\":" << gps_state.origin_stability_samples << ","
+        << "\"origin_lock_ready\":" << boolJson(auto_workspace_gps_state.origin_stable) << ","
+        << "\"origin_lock_radius_m\":" << numberJson(auto_workspace_gps_state.origin_stability_radius_m, 3) << ","
+        << "\"origin_lock_samples\":" << auto_workspace_gps_state.origin_stability_samples << ","
         << "\"destination_latitude\":" << (auto_workspace_plan_state.valid ? numberJson(auto_workspace_plan_state.destination_latitude, 7) : "null") << ","
         << "\"destination_longitude\":" << (auto_workspace_plan_state.valid ? numberJson(auto_workspace_plan_state.destination_longitude, 7) : "null") << ","
         << "\"destination_x_m\":" << numberJson(auto_workspace_runtime_state.destination_x_m, 3) << ","

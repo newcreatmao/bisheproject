@@ -2661,25 +2661,47 @@
 	      }
 	    }
 
-	    function renderAutoWorkspaceTelemetry(gps, imu) {
+	    function renderAutoWorkspaceTelemetry(gps, imu, autoRuntime) {
 	      const gpsValid =
 	        gps && gps.valid &&
 	        Number.isFinite(Number(gps.latitude)) &&
 	        Number.isFinite(Number(gps.longitude));
-	      autoWorkspaceState.latestGps = gpsValid ? {
+	      const runtimeLatitude = finiteNumber(autoRuntime && autoRuntime.current_latitude);
+	      const runtimeLongitude = finiteNumber(autoRuntime && autoRuntime.current_longitude);
+	      const runtimeGpsValid =
+	        autoRuntime &&
+	        autoRuntime.gps_valid &&
+	        runtimeLatitude !== null &&
+	        runtimeLongitude !== null;
+	      autoWorkspaceState.latestGps = runtimeGpsValid ? {
+	        valid: true,
+	        latitude: runtimeLatitude,
+	        longitude: runtimeLongitude,
+	        altitude_m: finiteNumber(gps && gps.altitude_m)
+	      } : (gpsValid ? {
 	        valid: true,
 	        latitude: Number(gps.latitude),
 	        longitude: Number(gps.longitude),
 	        altitude_m: finiteNumber(gps.altitude_m)
-	      } : { valid: false };
-	      autoWorkspaceState.latestImu = imu && imu.valid ? {
+	      } : { valid: false });
+	      const runtimeYaw = finiteNumber(autoRuntime && autoRuntime.current_yaw_deg);
+	      const runtimeHeadingValid =
+	        autoRuntime &&
+	        autoRuntime.heading_valid &&
+	        runtimeYaw !== null;
+	      autoWorkspaceState.latestImu = runtimeHeadingValid ? {
+	        valid: true,
+	        roll_deg: finiteNumber(imu && imu.roll_deg),
+	        pitch_deg: finiteNumber(imu && imu.pitch_deg),
+	        yaw_deg: runtimeYaw
+	      } : (imu && imu.valid ? {
 	        valid: true,
 	        roll_deg: finiteNumber(imu.roll_deg),
 	        pitch_deg: finiteNumber(imu.pitch_deg),
 	        yaw_deg: finiteNumber(imu.yaw_deg)
-	      } : { valid: false };
+	      } : { valid: false });
 	      renderAutoWorkspaceSummary();
-	      if (gpsValid) {
+	      if (runtimeGpsValid || gpsValid) {
 	        const frame = autoCoordinateFrame();
 	        const now = Date.now();
 	        if ((!frame || !frame.origin_valid) && now - autoWorkspaceState.lastOriginConfigRefreshAt >= 1500) {
@@ -2764,6 +2786,7 @@
 	      const gps = keyDisplay && keyDisplay.gps ? keyDisplay.gps : {};
 	      const imu = keyDisplay && keyDisplay.imu ? keyDisplay.imu : {};
 	      const vehicle = keyDisplay && keyDisplay.vehicle ? keyDisplay.vehicle : {};
+	      const autoWorkspace = keyDisplay && keyDisplay.auto_workspace ? keyDisplay.auto_workspace : null;
 	      autoWorkspaceState.latestVehicle = vehicle;
 
 	      setText('lat-text', gps.valid ? fixedText(gps.latitude, 7) : '--');
@@ -2773,7 +2796,7 @@
 	        : '--');
 	      setText('vehicle-speed-text', vehicle.speed_valid ? `${vehicle.speed} cm/s` : '--');
 	      setText('vehicle-angle-text', vehicle.angle_valid ? vehicleAngleText(vehicle.angle) : '--');
-	      renderAutoWorkspaceTelemetry(gps, imu);
+	      renderAutoWorkspaceTelemetry(gps, imu, autoWorkspace);
 	    }
 
 	    function renderLidarSectors(lidar) {
@@ -3274,7 +3297,13 @@
 	      }
 	      lidarSectorRefreshInFlight = true;
 	      try {
-	        const response = await fetch('/api/lidar/sectors', { cache: 'no-store' });
+	        const workspace =
+	          workspaceState.activeMode === 'AUTO'
+	            ? 'AUTO'
+	            : 'AVOIDANCE';
+	        const response = await fetch(
+	          `/api/lidar/sectors?workspace=${encodeURIComponent(workspace)}`,
+	          { cache: 'no-store' });
 	        if (!response.ok) {
 	          throw new Error(`HTTP ${response.status}`);
 	        }
