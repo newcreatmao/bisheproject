@@ -105,6 +105,60 @@ matches_expected_command() {
     [[ -n "$cmdline" && "$cmdline" == *"$needle"* ]]
 }
 
+collect_matching_pids() {
+    local needle="$1"
+    local line
+    local pid
+    local args
+
+    while IFS= read -r line; do
+        pid="${line%% *}"
+        args="${line#* }"
+        if [[ -n "$pid" && "$args" == *"$needle"* ]]; then
+            printf '%s\n' "$pid"
+        fi
+    done < <(ps -eo pid=,args=)
+}
+
+terminate_pid_list() {
+    local name="$1"
+    shift
+    local pids=("$@")
+    local pid
+
+    if [[ "${#pids[@]}" -eq 0 ]]; then
+        return 0
+    fi
+
+    echo "$name 检测到残留实例，正在清理: ${pids[*]}"
+
+    for pid in "${pids[@]}"; do
+        if is_pid_alive "$pid"; then
+            kill -TERM "$pid" 2>/dev/null || true
+        fi
+    done
+
+    for _ in $(seq 1 10); do
+        local all_stopped=1
+        for pid in "${pids[@]}"; do
+            if is_pid_alive "$pid"; then
+                all_stopped=0
+                break
+            fi
+        done
+        if [[ "$all_stopped" -eq 1 ]]; then
+            return 0
+        fi
+        sleep 1
+    done
+
+    for pid in "${pids[@]}"; do
+        if is_pid_alive "$pid"; then
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+    done
+}
+
 component_pid() {
     local pid_file="$1"
     local needle="$2"
@@ -129,6 +183,55 @@ component_pid() {
     return 1
 }
 
+reconcile_component_processes() {
+    local name="$1"
+    local pid_file="$2"
+    local needle="$3"
+    local tracked_pid=""
+    local -a matching_pids=()
+    local -a stray_pids=()
+    local pid
+
+    if tracked_pid="$(component_pid "$pid_file" "$needle")"; then
+        while IFS= read -r pid; do
+            [[ -n "$pid" ]] || continue
+            matching_pids+=("$pid")
+        done < <(collect_matching_pids "$needle")
+
+        for pid in "${matching_pids[@]}"; do
+            if [[ "$pid" != "$tracked_pid" ]]; then
+                stray_pids+=("$pid")
+            fi
+        done
+
+        if [[ "${#stray_pids[@]}" -gt 0 ]]; then
+            terminate_pid_list "$name" "${stray_pids[@]}"
+        fi
+        return 0
+    fi
+
+    while IFS= read -r pid; do
+        [[ -n "$pid" ]] || continue
+        matching_pids+=("$pid")
+    done < <(collect_matching_pids "$needle")
+
+    case "${#matching_pids[@]}" in
+        0)
+            return 1
+            ;;
+        1)
+            echo "$name 检测到未登记的已运行实例，接管 PID=${matching_pids[0]}"
+            echo "${matching_pids[0]}" > "$pid_file"
+            return 0
+            ;;
+        *)
+            terminate_pid_list "$name" "${matching_pids[@]}"
+            rm -f "$pid_file"
+            return 1
+            ;;
+    esac
+}
+
 start_component() {
     local name="$1"
     local pid_file="$2"
@@ -137,6 +240,7 @@ start_component() {
     local command="$5"
 
     local pid
+    reconcile_component_processes "$name" "$pid_file" "$needle" || true
     if pid="$(component_pid "$pid_file" "$needle")"; then
         echo "$name 已在运行，PID=$pid"
         return 0
@@ -163,27 +267,46 @@ stop_component() {
     local pid_file="$2"
     local needle="$3"
 
-    local pid
-    if ! pid="$(component_pid "$pid_file" "$needle")"; then
-        echo "$name 未运行"
-        return 0
+    local pid=""
+    local had_any=0
+    local -a remaining_pids=()
+
+    if pid="$(component_pid "$pid_file" "$needle")"; then
+        had_any=1
+        echo "停止 $name，PID=$pid"
+        kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+
+        for _ in $(seq 1 10); do
+            if ! is_pid_alive "$pid"; then
+                rm -f "$pid_file"
+                echo "$name 已停止"
+                break
+            fi
+            sleep 1
+        done
+
+        if is_pid_alive "$pid"; then
+            kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+            rm -f "$pid_file"
+            echo "$name 已强制停止"
+        fi
     fi
 
-    echo "停止 $name，PID=$pid"
-    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
-
-    for _ in $(seq 1 10); do
-        if ! is_pid_alive "$pid"; then
-            rm -f "$pid_file"
-            echo "$name 已停止"
-            return 0
-        fi
-        sleep 1
-    done
-
-    kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
     rm -f "$pid_file"
-    echo "$name 已强制停止"
+
+    while IFS= read -r pid; do
+        [[ -n "$pid" ]] || continue
+        remaining_pids+=("$pid")
+    done < <(collect_matching_pids "$needle")
+
+    if [[ "${#remaining_pids[@]}" -gt 0 ]]; then
+        had_any=1
+        terminate_pid_list "$name" "${remaining_pids[@]}"
+    fi
+
+    if [[ "$had_any" -eq 0 ]]; then
+        echo "$name 未运行"
+    fi
 }
 
 print_status_component() {
@@ -191,12 +314,42 @@ print_status_component() {
     local pid_file="$2"
     local needle="$3"
 
+    local tracked_pid=""
     local pid
-    if pid="$(component_pid "$pid_file" "$needle")"; then
-        echo "$name: running (PID=$pid)"
-    else
-        echo "$name: stopped"
+    local -a matching_pids=()
+    local -a extra_pids=()
+
+    while IFS= read -r pid; do
+        [[ -n "$pid" ]] || continue
+        matching_pids+=("$pid")
+    done < <(collect_matching_pids "$needle")
+
+    if tracked_pid="$(component_pid "$pid_file" "$needle")"; then
+        for pid in "${matching_pids[@]}"; do
+            if [[ "$pid" != "$tracked_pid" ]]; then
+                extra_pids+=("$pid")
+            fi
+        done
+
+        if [[ "${#extra_pids[@]}" -gt 0 ]]; then
+            echo "$name: running (PID=$tracked_pid, duplicate PIDs=${extra_pids[*]})"
+        else
+            echo "$name: running (PID=$tracked_pid)"
+        fi
+        return 0
     fi
+
+    case "${#matching_pids[@]}" in
+        0)
+            echo "$name: stopped"
+            ;;
+        1)
+            echo "$name: running (untracked PID=${matching_pids[0]})"
+            ;;
+        *)
+            echo "$name: duplicate instances detected (PIDs=${matching_pids[*]})"
+            ;;
+    esac
 }
 
 start_stack() {
@@ -256,10 +409,16 @@ exec \"$PROJECT_ROOT/bin/project\"
         "$command"
 }
 
+ensure_single_instance() {
+    reconcile_component_processes "ROS 传感器栈" "$STACK_PID_FILE" "project_stack.launch.py" || true
+    reconcile_component_processes "Web 控制台" "$WEB_PID_FILE" "$PROJECT_ROOT/bin/project" || true
+}
+
 start_all() {
     source_project_env
     ensure_env
     ensure_dirs
+    ensure_single_instance
     start_stack
     start_web
     echo "启动完成"

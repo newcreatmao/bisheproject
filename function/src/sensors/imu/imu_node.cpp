@@ -17,6 +17,7 @@ ImuSensor::ImuSensor(
       corrected_imu_frame_("base_link"),
       publish_corrected_imu_(true),
       mount_correction_enabled_(true),
+      preserve_yaw_during_mount_correction_(true),
       sample_sequence_(0),
       calibrated_(false),
       current_samples_(0),
@@ -53,6 +54,8 @@ ImuSensor::ImuSensor(
         node_->declare_parameter<bool>("publish_corrected_imu", true);
     mount_correction_enabled_ =
         node_->declare_parameter<bool>("imu_mount_correction_enabled", true);
+    preserve_yaw_during_mount_correction_ =
+        node_->declare_parameter<bool>("imu_mount_preserve_yaw", true);
     calibration_samples_ = node_->declare_parameter<int>("calibration_samples", 100);
     if (calibration_samples_ < 1) {
         calibration_samples_ = 1;
@@ -80,6 +83,8 @@ ImuSensor::ImuSensor(
     RCLCPP_INFO(node_->get_logger(), "imu topic: %s", imu_topic_.c_str());
     RCLCPP_INFO(node_->get_logger(), "imu mount correction: %s",
                 mount_correction_enabled_ ? "enabled" : "disabled");
+    RCLCPP_INFO(node_->get_logger(), "imu mount preserve yaw: %s",
+                preserve_yaw_during_mount_correction_ ? "enabled" : "disabled");
     RCLCPP_INFO(node_->get_logger(), "imu calibration samples: %d", calibration_samples_);
     RCLCPP_INFO(node_->get_logger(), "imu corrected topic: %s", corrected_imu_topic_.c_str());
     RCLCPP_INFO(node_->get_logger(), "imu corrected frame: %s", corrected_imu_frame_.c_str());
@@ -211,16 +216,82 @@ void ImuSensor::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
             current_samples_++;
 
             if (current_samples_ >= calibration_samples_) {
-                mount_qx_ = quat_sum_x_ / static_cast<double>(current_samples_);
-                mount_qy_ = quat_sum_y_ / static_cast<double>(current_samples_);
-                mount_qz_ = quat_sum_z_ / static_cast<double>(current_samples_);
-                mount_qw_ = quat_sum_w_ / static_cast<double>(current_samples_);
+                double reference_qx = quat_sum_x_ / static_cast<double>(current_samples_);
+                double reference_qy = quat_sum_y_ / static_cast<double>(current_samples_);
+                double reference_qz = quat_sum_z_ / static_cast<double>(current_samples_);
+                double reference_qw = quat_sum_w_ / static_cast<double>(current_samples_);
 
-                if (!normalizeQuaternion(mount_qx_, mount_qy_, mount_qz_, mount_qw_)) {
+                if (!normalizeQuaternion(reference_qx, reference_qy, reference_qz, reference_qw)) {
                     mount_qx_ = 0.0;
                     mount_qy_ = 0.0;
                     mount_qz_ = 0.0;
                     mount_qw_ = 1.0;
+                } else if (preserve_yaw_during_mount_correction_) {
+                    // Keep the startup heading and only remove the tilt portion.
+                    // This avoids treating the vehicle's world yaw as a mount error.
+                    double reference_roll = 0.0;
+                    double reference_pitch = 0.0;
+                    double reference_yaw = 0.0;
+                    quaternionToEuler(
+                        reference_qx,
+                        reference_qy,
+                        reference_qz,
+                        reference_qw,
+                        reference_roll,
+                        reference_pitch,
+                        reference_yaw);
+
+                    double desired_qx = 0.0;
+                    double desired_qy = 0.0;
+                    double desired_qz = 0.0;
+                    double desired_qw = 1.0;
+                    eulerToQuaternion(
+                        0.0,
+                        0.0,
+                        reference_yaw,
+                        desired_qx,
+                        desired_qy,
+                        desired_qz,
+                        desired_qw);
+
+                    double desired_inverse_x = 0.0;
+                    double desired_inverse_y = 0.0;
+                    double desired_inverse_z = 0.0;
+                    double desired_inverse_w = 1.0;
+                    quaternionConjugate(
+                        desired_qx,
+                        desired_qy,
+                        desired_qz,
+                        desired_qw,
+                        desired_inverse_x,
+                        desired_inverse_y,
+                        desired_inverse_z,
+                        desired_inverse_w);
+
+                    quaternionMultiply(
+                        desired_inverse_x,
+                        desired_inverse_y,
+                        desired_inverse_z,
+                        desired_inverse_w,
+                        reference_qx,
+                        reference_qy,
+                        reference_qz,
+                        reference_qw,
+                        mount_qx_,
+                        mount_qy_,
+                        mount_qz_,
+                        mount_qw_);
+                    if (!normalizeQuaternion(mount_qx_, mount_qy_, mount_qz_, mount_qw_)) {
+                        mount_qx_ = 0.0;
+                        mount_qy_ = 0.0;
+                        mount_qz_ = 0.0;
+                        mount_qw_ = 1.0;
+                    }
+                } else {
+                    mount_qx_ = reference_qx;
+                    mount_qy_ = reference_qy;
+                    mount_qz_ = reference_qz;
+                    mount_qw_ = reference_qw;
                 }
 
                 mount_quaternion_ready_ = true;
@@ -487,6 +558,28 @@ void ImuSensor::quaternionToEuler(
     const double siny_cosp = 2.0 * (w * z + x * y);
     const double cosy_cosp = 1.0 - 2.0 * (y * y + z * z);
     yaw = std::atan2(siny_cosp, cosy_cosp);
+}
+
+void ImuSensor::eulerToQuaternion(
+    double roll, double pitch, double yaw,
+    double &x, double &y, double &z, double &w)
+{
+    const double half_roll = roll * 0.5;
+    const double half_pitch = pitch * 0.5;
+    const double half_yaw = yaw * 0.5;
+
+    const double sin_roll = std::sin(half_roll);
+    const double cos_roll = std::cos(half_roll);
+    const double sin_pitch = std::sin(half_pitch);
+    const double cos_pitch = std::cos(half_pitch);
+    const double sin_yaw = std::sin(half_yaw);
+    const double cos_yaw = std::cos(half_yaw);
+
+    w = cos_roll * cos_pitch * cos_yaw + sin_roll * sin_pitch * sin_yaw;
+    x = sin_roll * cos_pitch * cos_yaw - cos_roll * sin_pitch * sin_yaw;
+    y = cos_roll * sin_pitch * cos_yaw + sin_roll * cos_pitch * sin_yaw;
+    z = cos_roll * cos_pitch * sin_yaw - sin_roll * sin_pitch * cos_yaw;
+    normalizeQuaternion(x, y, z, w);
 }
 
 }  // namespace bishe::sensors::imu

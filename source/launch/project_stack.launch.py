@@ -1,11 +1,65 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.actions import IncludeLaunchDescription
+from launch.actions import OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration
 from ament_index_python.packages import get_package_share_directory
+import fcntl
 import os
+from pathlib import Path
+
+
+_STACK_LOCK_FILE = None
+
+
+def _resolve_project_root(package_share: str):
+    env_root = os.environ.get('PROJECT_ROOT')
+    if env_root:
+        return Path(env_root)
+
+    current = Path(package_share).resolve()
+    for candidate in [current, *current.parents]:
+        if (candidate / 'package.xml').exists() and (candidate / 'CMakeLists.txt').exists():
+            return candidate
+    return None
+
+
+def _stack_lock_path(package_share: str):
+    project_root = _resolve_project_root(package_share)
+    if project_root is not None:
+        lock_dir = project_root / 'log' / 'runtime' / 'locks'
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        return lock_dir / 'project_stack.lock'
+    return Path('/tmp/project_stack.lock')
+
+
+def _acquire_stack_single_instance_lock(context, *args, **kwargs):
+    del context, args, kwargs
+    global _STACK_LOCK_FILE
+
+    if _STACK_LOCK_FILE is not None:
+        return []
+
+    package_share = get_package_share_directory('project')
+    lock_path = _stack_lock_path(package_share)
+    lock_file = open(lock_path, 'a+', encoding='utf-8')
+
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        lock_file.close()
+        raise RuntimeError(
+            f'another project sensor stack instance is already running (lock: {lock_path})'
+        ) from exc
+
+    lock_file.seek(0)
+    lock_file.truncate()
+    lock_file.write(f'{os.getpid()}\n')
+    lock_file.flush()
+    _STACK_LOCK_FILE = lock_file
+    return []
 
 
 def generate_launch_description():
@@ -133,6 +187,7 @@ def generate_launch_description():
             'photo_output_dir',
             default_value='~/use/project/source/allfile/photos',
         ),
+        OpaqueFunction(function=_acquire_stack_single_instance_lock),
         camera_depth_launch,
         gps_launch,
         imu_launch,

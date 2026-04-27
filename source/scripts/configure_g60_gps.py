@@ -26,6 +26,18 @@ RATE_HZ_TO_FIX_INTERVAL_MS = {
     10: 100,
 }
 
+SENTENCE_PROFILES = {
+    # Keep the AUTO pipeline lean:
+    # - GGA for position/fix quality
+    # - RMC for ground speed / course and /vel publication in the current driver
+    # - GST for receiver-reported covariance, which nmea_navsat_driver can use
+    "project": "PCAS03,1,0,0,0,1,0,0,0,0,0,,,0,1,,,,0",
+    # Legacy profile retained for fallback/experiments.
+    "legacy": "PCAS03,1,0,0,0,1,1,0,0,0,0,,,0,0,,,,0",
+}
+
+RATE_VERIFY_RATIO = 0.85
+
 
 def checksum_ok(line: str) -> bool:
     if not line.startswith("$") or "*" not in line:
@@ -113,10 +125,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--probe-baud", dest="probe_bauds", action="append", type=int)
     parser.add_argument("--target-baud", type=int, default=115200)
     parser.add_argument("--rate-hz", type=int, default=10)
+    parser.add_argument("--profile", choices=sorted(SENTENCE_PROFILES.keys()), default="project")
     parser.add_argument("--probe-seconds", type=float, default=1.2)
     parser.add_argument("--verify-seconds", type=float, default=1.4)
     parser.add_argument("--persist", action="store_true")
     return parser.parse_args()
+
+
+def configure_runtime(ser: serial.Serial, rate_hz: int, sentence_profile: str, persist: bool) -> None:
+    target_rate_body = f"PCAS02,{RATE_HZ_TO_FIX_INTERVAL_MS[rate_hz]}"
+    send_command(ser, target_rate_body, settle_sec=0.5)
+    send_command(ser, sentence_profile, settle_sec=0.5)
+    if persist:
+        send_command(ser, "PCAS00", settle_sec=0.5)
+
+
+def supported_rate_candidates(target_rate_hz: int) -> list[int]:
+    return [
+        rate_hz
+        for rate_hz in sorted(RATE_HZ_TO_FIX_INTERVAL_MS.keys(), reverse=True)
+        if rate_hz <= target_rate_hz
+    ]
 
 
 def main() -> int:
@@ -140,45 +169,62 @@ def main() -> int:
 
     print(f"[gps-config] detected baud={detected_baud}", flush=True)
 
-    minimal_sentence_profile = "PCAS03,1,0,0,0,1,1,0,0,0,0,,,0,0,,,,0"
+    sentence_profile = SENTENCE_PROFILES[args.profile]
     target_baud_body = f"PCAS01,{BAUD_TO_PCAS_CODE[args.target_baud]}"
-    target_rate_body = f"PCAS02,{RATE_HZ_TO_FIX_INTERVAL_MS[args.rate_hz]}"
 
     try:
         if detected_baud != args.target_baud:
             with open_serial(args.port, detected_baud, 0.2) as ser:
                 time.sleep(0.3)
                 ser.reset_input_buffer()
-                send_command(ser, minimal_sentence_profile)
+                send_command(ser, sentence_profile)
                 send_command(ser, target_baud_body)
             time.sleep(0.6)
 
-        with open_serial(args.port, args.target_baud, 0.2) as ser:
-            time.sleep(0.5)
-            ser.reset_input_buffer()
-            send_command(ser, target_rate_body, settle_sec=0.5)
-            send_command(ser, minimal_sentence_profile, settle_sec=0.5)
-            if args.persist:
-                send_command(ser, "PCAS00", settle_sec=0.5)
     except serial.SerialException as exc:
         print(f"[gps-config] serial error: {exc}", file=sys.stderr, flush=True)
         return 1
 
-    measured_rate = verify_rate_hz(args.port, args.target_baud, args.verify_seconds)
-    print(
-        f"[gps-config] verified GGA rate ~= {measured_rate:.2f}Hz at baud={args.target_baud}",
-        flush=True,
-    )
+    selected_rate_hz = None
+    selected_measured_rate_hz = 0.0
+    rate_candidates = supported_rate_candidates(args.rate_hz)
+    for candidate_rate_hz in rate_candidates:
+        try:
+            with open_serial(args.port, args.target_baud, 0.2) as ser:
+                time.sleep(0.5)
+                ser.reset_input_buffer()
+                configure_runtime(ser, candidate_rate_hz, sentence_profile, args.persist)
+        except serial.SerialException as exc:
+            print(f"[gps-config] serial error: {exc}", file=sys.stderr, flush=True)
+            return 1
 
-    if measured_rate < max(1.0, args.rate_hz * 0.7):
+        measured_rate_hz = verify_rate_hz(args.port, args.target_baud, args.verify_seconds)
         print(
-            f"[gps-config] warning: expected about {args.rate_hz}Hz but measured {measured_rate:.2f}Hz; "
-            "keeping the best-effort runtime configuration",
+            f"[gps-config] verified GGA rate ~= {measured_rate_hz:.2f}Hz at baud={args.target_baud} "
+            f"(requested {candidate_rate_hz}Hz, profile={args.profile})",
             flush=True,
         )
-        return 0
 
-    print("[gps-config] runtime configuration applied", flush=True)
+        selected_rate_hz = candidate_rate_hz
+        selected_measured_rate_hz = measured_rate_hz
+        if measured_rate_hz >= max(1.0, candidate_rate_hz * RATE_VERIFY_RATIO):
+            break
+
+        print(
+            f"[gps-config] rate {candidate_rate_hz}Hz is not stable enough; "
+            "trying the next lower supported rate",
+            flush=True,
+        )
+
+    if selected_rate_hz is None:
+        print("[gps-config] failed to apply any runtime rate", file=sys.stderr, flush=True)
+        return 1
+
+    print(
+        f"[gps-config] runtime configuration applied: selected_rate={selected_rate_hz}Hz "
+        f"measured_rate={selected_measured_rate_hz:.2f}Hz profile={args.profile}",
+        flush=True,
+    )
     return 0
 
 

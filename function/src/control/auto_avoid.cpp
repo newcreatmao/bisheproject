@@ -3589,7 +3589,7 @@ AutoAvoidController::Command AutoAvoidController::driveCommand(
     command.reason_code = debug.reason_code;
     command.fallback_reason = debug.fallback_reason;
     command.debug = debug;
-    command.debug_text = formatDebugText(debug);
+    command.debug_text.clear();
     return command;
 }
 
@@ -3622,6 +3622,6 @@ AutoAvoidController::Command AutoAvoidController::stopCommand(DebugInfo debug) c
     command.reason_code = debug.reason_code;
     command.fallback_reason = debug.fallback_reason;
     command.debug = debug;
-    command.debug_text = formatDebugText(debug);
+    command.debug_text.clear();
     return command;
 }

@@ -23,6 +23,8 @@ def generate_launch_description():
             '--port', LaunchConfiguration('imu_port'),
             '--baud', LaunchConfiguration('imu_baud'),
             '--rate-hz', LaunchConfiguration('imu_rate_hz'),
+            '--heading-mode', LaunchConfiguration('imu_heading_mode'),
+            '--output-profile', LaunchConfiguration('imu_output_profile'),
         ],
         output='screen',
     )
@@ -53,6 +55,10 @@ def generate_launch_description():
             'corrected_imu_frame': 'base_link',
             'publish_corrected_imu': True,
             'imu_mount_correction_enabled': True,
+            'imu_mount_preserve_yaw': ParameterValue(
+                LaunchConfiguration('imu_mount_preserve_yaw'),
+                value_type=bool,
+            ),
             'calibration_samples': 100,
         }],
         output='screen',
@@ -62,6 +68,9 @@ def generate_launch_description():
         DeclareLaunchArgument('imu_port', default_value='/dev/imu'),
         DeclareLaunchArgument('imu_baud', default_value='460800'),
         DeclareLaunchArgument('imu_rate_hz', default_value='50'),
+        DeclareLaunchArgument('imu_heading_mode', default_value='vru'),
+        DeclareLaunchArgument('imu_output_profile', default_value='project'),
+        DeclareLaunchArgument('imu_mount_preserve_yaw', default_value='true'),
         imu_setup_process,
         RegisterEventHandler(
             OnProcessExit(

@@ -13,6 +13,7 @@
 #include "control/auto_avoid_control_snapshot_pool.hpp"
 #include "control/auto_avoid.hpp"
 #include "control/auto_avoid_input_builder.hpp"
+#include "geometry_msgs/msg/twist_stamped.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -41,6 +42,12 @@ private:
     struct GpsRuntimeState {
         std::uint64_t message_count = 0;
         std::chrono::steady_clock::time_point last_message_steady_{};
+        bool source_stamp_valid = false;
+        rclcpp::Time last_source_stamp = rclcpp::Time(0, 0, RCL_ROS_TIME);
+        std::uint64_t velocity_message_count = 0;
+        std::chrono::steady_clock::time_point last_velocity_steady_{};
+        bool velocity_source_stamp_valid = false;
+        rclcpp::Time last_velocity_source_stamp = rclcpp::Time(0, 0, RCL_ROS_TIME);
         int status = -1;
         bool has_position = false;
         bool filtered_valid = false;
@@ -57,6 +64,12 @@ private:
         bool heading_valid = false;
         double heading_deg = 0.0;
         std::string heading_source;
+        bool velocity_valid = false;
+        double velocity_x_m_s = 0.0;
+        double velocity_y_m_s = 0.0;
+        double speed_m_s = 0.0;
+        bool course_valid = false;
+        double course_deg = 0.0;
         bool base_link_valid = false;
         double base_link_latitude = 0.0;
         double base_link_longitude = 0.0;
@@ -94,9 +107,40 @@ private:
         std::string heading_source;
     };
 
+    struct AutoWorkspaceGpsFusionState {
+        bool anchor_valid = false;
+        double anchor_latitude = 0.0;
+        double anchor_longitude = 0.0;
+        bool filtered_valid = false;
+        double filtered_x_m = 0.0;
+        double filtered_y_m = 0.0;
+        double filtered_altitude_m = 0.0;
+        double filtered_vx_m_s = 0.0;
+        double filtered_vy_m_s = 0.0;
+        std::chrono::steady_clock::time_point last_update_steady_{};
+        std::deque<GpsFilterSample> filtered_window;
+        bool last_position_valid = false;
+        double last_raw_x_m = 0.0;
+        double last_raw_y_m = 0.0;
+        double last_raw_altitude_m = 0.0;
+        double last_horizontal_stddev_m = std::numeric_limits<double>::quiet_NaN();
+        std::size_t stationary_sample_count = 0;
+        bool stationary_anchor_valid = false;
+        double stationary_anchor_x_m = 0.0;
+        double stationary_anchor_y_m = 0.0;
+        double stationary_anchor_altitude_m = 0.0;
+        bool heading_offset_valid = false;
+        double heading_offset_deg = 0.0;
+        std::string heading_source;
+        bool course_valid = false;
+        double course_bearing_deg = 0.0;
+    };
+
     struct ImuRuntimeState {
         std::uint64_t message_count = 0;
         std::chrono::steady_clock::time_point last_message_steady_{};
+        bool source_stamp_valid = false;
+        rclcpp::Time last_source_stamp = rclcpp::Time(0, 0, RCL_ROS_TIME);
         bool has_attitude = false;
         double roll_deg = 0.0;
         double pitch_deg = 0.0;
@@ -113,6 +157,8 @@ private:
 
         std::uint64_t message_count = 0;
         std::chrono::steady_clock::time_point last_message_steady_{};
+        bool source_stamp_valid = false;
+        rclcpp::Time last_source_stamp = rclcpp::Time(0, 0, RCL_ROS_TIME);
         bool valid = false;
         int valid_points = 0;
         SectorRuntimeState negative_front_sector;
@@ -190,6 +236,8 @@ private:
     };
 
     struct AutoWorkspaceRuntimeState {
+        using TrackPoint = AutoWorkspacePlanState::PreviewPoint;
+
         bool plan_ready = false;
         bool awaiting_start_ack = false;
         bool task_running = false;
@@ -217,6 +265,24 @@ private:
         std::string route_provider;
         std::string phase = "idle";
         std::string message = "自动任务待命";
+        std::vector<TrackPoint> actual_track_path;
+    };
+
+    struct AutoWorkspaceTimingAssessment {
+        double gps_age_ms = std::numeric_limits<double>::quiet_NaN();
+        double imu_age_ms = std::numeric_limits<double>::quiet_NaN();
+        double lidar_age_ms = std::numeric_limits<double>::quiet_NaN();
+        double gps_imu_skew_ms = std::numeric_limits<double>::quiet_NaN();
+        double lidar_imu_skew_ms = std::numeric_limits<double>::quiet_NaN();
+        bool gps_fresh = false;
+        bool imu_fresh = false;
+        bool lidar_fresh = false;
+        bool gps_imu_aligned = false;
+        bool lidar_imu_aligned = false;
+        bool navigation_ready = false;
+        bool avoidance_ready = false;
+        std::string navigation_block_reason;
+        std::string avoidance_block_reason;
     };
 
     void configureRoutes();
@@ -254,6 +320,7 @@ private:
     void onLidarScan(const sensor_msgs::msg::LaserScan::SharedPtr msg);
     void onImu(const sensor_msgs::msg::Imu::SharedPtr msg);
     void onGpsFix(const sensor_msgs::msg::NavSatFix::SharedPtr msg);
+    void onGpsVelocity(const geometry_msgs::msg::TwistStamped::SharedPtr msg);
     void onRgbYolo(const std_msgs::msg::String::SharedPtr msg);
     void resetGpsFilterLocked();
     void updateFilteredGpsLocked(
@@ -263,12 +330,12 @@ private:
         double horizontal_stddev_m);
     void resetAutoWorkspaceGpsFilterLocked();
     void updateAutoWorkspaceFilteredGpsLocked(
-        double latitude,
-        double longitude,
-        double altitude,
-        double horizontal_stddev_m,
         const std::chrono::steady_clock::time_point& now);
     void updateAutoWorkspaceHeadingFromRouteLocked(double route_bearing_deg);
+    AutoWorkspaceTimingAssessment assessAutoWorkspaceTiming(
+        const GpsRuntimeState& gps_state,
+        const ImuRuntimeState& imu_state,
+        const LidarRuntimeState& lidar_state) const;
     void resetLidarDisplayFilterLocked(LidarDisplayFilterState& filter_state);
     LidarRuntimeState::SectorRuntimeState filteredLidarDisplaySectorLocked(
         const LidarRuntimeState::SectorRuntimeState& sample,
@@ -299,6 +366,7 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr lidar_sub_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
     rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr gps_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr gps_vel_sub_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr rgb_yolo_sub_;
     std::unique_ptr<UART> stm32_uart_;
     std::unique_ptr<ToStm> to_stm_;
@@ -330,7 +398,7 @@ private:
     GpsFilterState gps_filter_state_;
     ImuRuntimeState auto_workspace_imu_state_;
     GpsRuntimeState auto_workspace_gps_state_;
-    GpsFilterState auto_workspace_gps_filter_state_;
+    AutoWorkspaceGpsFusionState auto_workspace_gps_filter_state_;
     AutoWorkspaceLocalFrameState auto_workspace_local_frame_state_;
     std::string latest_rgb_yolo_payload_;
     std::chrono::steady_clock::time_point latest_rgb_yolo_received_steady_{};

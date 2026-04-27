@@ -39,6 +39,9 @@ private:
     static void quaternionToEuler(
         double x, double y, double z, double w,
         double &roll, double &pitch, double &yaw);
+    static void eulerToQuaternion(
+        double roll, double pitch, double yaw,
+        double &x, double &y, double &z, double &w);
 
     static double normalizeAngle(double angle);
     static bool normalizeQuaternion(double & x, double & y, double & z, double & w);
@@ -80,6 +83,7 @@ private:
     std::string corrected_imu_frame_;
     bool publish_corrected_imu_;
     bool mount_correction_enabled_;
+    bool preserve_yaw_during_mount_correction_;
     int calibration_samples_;
     std::uint64_t sample_sequence_;
 

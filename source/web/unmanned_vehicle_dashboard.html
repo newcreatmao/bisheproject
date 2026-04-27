@@ -178,6 +178,7 @@
 
     .btn-primary,
     .btn-success,
+    .btn-warn,
     .btn-danger,
     .btn-ghost,
     .chip {
@@ -188,6 +189,7 @@
 
     .btn-primary,
     .btn-success,
+    .btn-warn,
     .btn-danger,
     .btn-ghost {
       cursor: pointer;
@@ -197,11 +199,13 @@
 
     .btn-primary:hover,
     .btn-success:hover,
+    .btn-warn:hover,
     .btn-danger:hover,
     .btn-ghost:hover { transform: translateY(-1px); }
 
     .btn-primary { background: linear-gradient(135deg, var(--primary), #60bbff); color: white; }
     .btn-success { background: linear-gradient(135deg, var(--success), #54ddb0); color: #072418; }
+    .btn-warn { background: linear-gradient(135deg, #f4b740, #ffd36f); color: #2c1b00; }
     .btn-danger { background: linear-gradient(135deg, var(--danger), #ff8080); color: white; }
     .btn-ghost {
       background: rgba(255,255,255,.05);
@@ -744,8 +748,8 @@
 
     .auto-workspace-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.95fr);
-      gap: 14px;
+      grid-template-columns: 1fr;
+      gap: 16px;
       align-items: start;
     }
 
@@ -776,7 +780,7 @@
 
     .auto-map-shell {
       position: relative;
-      min-height: 360px;
+      min-height: 430px;
       border-radius: 18px;
       overflow: hidden;
       border: 1px solid rgba(255,255,255,.06);
@@ -811,6 +815,7 @@
     }
 
     .auto-map-canvas {
+      z-index: 1;
       background: #0a1424;
     }
 
@@ -825,6 +830,7 @@
     }
 
     .auto-map-empty {
+      z-index: 0;
       display: grid;
       place-items: center;
       padding: 24px;
@@ -844,7 +850,8 @@
       position: absolute;
       left: 14px;
       top: 14px;
-      z-index: 2;
+      z-index: 1200;
+      pointer-events: none;
       min-width: 170px;
       padding: 11px 12px;
       border-radius: 14px;
@@ -868,17 +875,113 @@
       line-height: 1.25;
     }
 
+    .auto-map-axis {
+      position: absolute;
+      right: 14px;
+      bottom: 14px;
+      z-index: 1200;
+      pointer-events: none;
+      width: 98px;
+      padding: 8px 9px 9px;
+      border-radius: 12px;
+      background: rgba(5, 10, 20, 0.76);
+      border: 1px solid rgba(255,255,255,.08);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 12px 24px rgba(0, 0, 0, 0.22);
+    }
+
+    .auto-map-axis-title {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1;
+    }
+
+    .auto-map-axis-cross {
+      position: relative;
+      width: 64px;
+      height: 64px;
+      margin-top: 8px;
+      margin-inline: auto;
+    }
+
+    .auto-map-axis-origin {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ffffff;
+      box-shadow: 0 0 0 4px rgba(91,213,255,.14);
+      transform: translate(-50%, -50%);
+    }
+
+    .auto-map-axis-line {
+      position: absolute;
+      background: linear-gradient(180deg, rgba(255,255,255,.96), rgba(91,213,255,.68));
+      border-radius: 999px;
+    }
+
+    .auto-map-axis-line.north {
+      left: 50%;
+      top: 8px;
+      width: 2px;
+      height: 24px;
+      transform: translateX(-50%);
+    }
+
+    .auto-map-axis-line.east {
+      top: 50%;
+      left: 50%;
+      width: 24px;
+      height: 2px;
+      transform: translateY(-50%);
+      transform-origin: left center;
+    }
+
+    .auto-map-axis-label {
+      position: absolute;
+      font-size: 10px;
+      font-weight: 700;
+      color: #dbeafe;
+      white-space: nowrap;
+    }
+
+    .auto-map-axis-label.north {
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .auto-map-axis-label.east {
+      top: 50%;
+      right: 0;
+      transform: translateY(-50%);
+    }
+
+    .auto-map-shell.selecting {
+      cursor: crosshair;
+      box-shadow:
+        inset 0 0 0 2px rgba(91,213,255,.18),
+        inset 0 0 24px rgba(91,213,255,.08);
+    }
+
     .auto-summary-grid,
     .auto-runtime-grid,
-    .auto-field-grid,
     .auto-planner-actions {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px;
     }
 
+    .auto-planner-actions {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     .auto-summary-card,
-    .auto-path-note {
+    .auto-path-note,
+    .auto-selection-card {
       padding: 13px 14px;
       border-radius: 15px;
       background:
@@ -891,35 +994,13 @@
       display: block;
     }
 
-    .auto-summary-card strong {
+    .auto-summary-card strong,
+    .auto-selection-card strong {
       display: block;
       margin-top: 8px;
       font-size: 16px;
       line-height: 1.35;
       word-break: break-word;
-    }
-
-    .auto-field {
-      display: grid;
-      gap: 8px;
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    .auto-field input {
-      width: 100%;
-      padding: 12px 13px;
-      border-radius: 13px;
-      border: 1px solid rgba(255,255,255,.08);
-      outline: none;
-      color: var(--text);
-      background: rgba(255,255,255,.04);
-      font: inherit;
-    }
-
-    .auto-field input:focus {
-      border-color: rgba(77,163,255,.38);
-      box-shadow: 0 0 0 1px rgba(77,163,255,.14);
     }
 
     .auto-planner-actions button {
@@ -1033,7 +1114,6 @@
       .lidar-sector-grid,
       .auto-workspace-grid,
       .auto-summary-grid,
-      .auto-field-grid,
       .auto-planner-actions {
         grid-template-columns: 1fr;
       }
@@ -1047,7 +1127,7 @@
       .manual-buttons,
       .avoidance-actions { grid-template-columns: 1fr; }
       .main { padding: 14px; }
-      .auto-map-shell { min-height: 300px; }
+      .auto-map-shell { min-height: 320px; }
     }
   </style>
 </head>
@@ -1081,9 +1161,11 @@
           </div>
           <div class="actions">
             <div class="chip" id="chip-serial">串口通信：未启动</div>
-            <button class="btn-success" type="button" id="system-start-btn">开始任务</button>
+            <button class="btn-danger" type="button" id="vehicle-emergency-stop-btn">车辆紧急停止</button>
+            <button class="btn-primary" type="button" id="vehicle-emergency-release-btn">车辆解除急停</button>
+            <button class="btn-success" type="button" id="sensors-start-btn">传感器开启</button>
+            <button class="btn-ghost" type="button" id="sensors-stop-btn">传感器停止</button>
             <button class="btn-ghost" type="button" id="system-restart-btn">系统重启</button>
-            <button class="btn-danger" type="button" id="system-emergency-stop-btn">紧急停止</button>
           </div>
         </div>
 
@@ -1162,6 +1244,16 @@
                                   <span>规划状态</span>
                                   <strong id="auto-plan-state">等待定位</strong>
                                 </div>
+                                <div class="auto-map-axis" aria-hidden="true">
+                                  <span class="auto-map-axis-title">方向参考</span>
+                                  <div class="auto-map-axis-cross">
+                                    <span class="auto-map-axis-origin"></span>
+                                    <span class="auto-map-axis-line north"></span>
+                                    <span class="auto-map-axis-line east"></span>
+                                    <span class="auto-map-axis-label north">北 +Y</span>
+                                    <span class="auto-map-axis-label east">东 +X</span>
+                                  </div>
+                                </div>
                                 <div class="auto-map-canvas" id="auto-map-canvas" hidden></div>
                                 <div class="auto-map-empty" id="auto-map-empty">
                                   <div>
@@ -1184,8 +1276,16 @@
                                   <strong id="auto-imu-yaw">--</strong>
                                 </div>
                                 <div class="auto-summary-card">
-                                  <span class="label">当前 XY</span>
+                                  <span class="label">控制 XY</span>
                                   <strong id="auto-current-position">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">原始 GPS XY</span>
+                                  <strong id="auto-raw-gps-position">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">GPS 精度</span>
+                                  <strong id="auto-gps-precision">--</strong>
                                 </div>
                                 <div class="auto-summary-card">
                                   <span class="label">目标 XY</span>
@@ -1193,27 +1293,24 @@
                                 </div>
                               </div>
 
-                              <div class="auto-field-grid">
-                                <label class="auto-field">
-                                  终点 X（东向，m）
-                                  <input id="auto-destination-x" type="number" step="0.1" placeholder="例如 18.0" />
-                                </label>
-                                <label class="auto-field">
-                                  终点 Y（北向，m）
-                                  <input id="auto-destination-y" type="number" step="0.1" placeholder="例如 -6.5" />
-                                </label>
+                              <div class="auto-selection-card">
+                                <span class="label">地图选点终点</span>
+                                <strong id="auto-selection-position">未选择</strong>
                               </div>
 
                               <p class="muted" id="auto-origin-text" style="margin:0;">XY 原点等待 GPS 有效定位后锁定。</p>
+                              <p class="muted" id="auto-selection-hint" style="margin:0;">点击“设置终点”后，地图会放大；请在地图上点选终点，再确认终点并规划路径。</p>
 
                               <div class="auto-planner-actions" aria-label="自动工作区路径规划">
-                                <button class="btn-primary" type="button" id="auto-plan-route-btn">规划路径</button>
+                                <button class="btn-primary" type="button" id="auto-pick-destination-btn">设置终点</button>
+                                <button class="btn-success" type="button" id="auto-confirm-destination-btn">确认终点并规划</button>
+                                <button class="btn-warn" type="button" id="auto-recalibrate-origin-btn">重新标定原点</button>
                                 <button class="btn-ghost" type="button" id="auto-clear-route-btn">清除路径</button>
                               </div>
 
                               <div class="auto-path-note">
                                 <span class="label">路径规划预览</span>
-                                <strong id="auto-planner-status">等待设置终点 XY 坐标。</strong>
+                                <strong id="auto-planner-status">等待设置地图终点。</strong>
                               </div>
 
                               <div class="auto-runtime-grid">
@@ -1234,6 +1331,29 @@
                                   <strong id="auto-runtime-command">--</strong>
                                 </div>
                               </div>
+
+                              <div class="auto-runtime-grid">
+                                <div class="auto-summary-card">
+                                  <span class="label">时序状态</span>
+                                  <strong id="auto-sensor-timing-status">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">GPS / IMU 时差</span>
+                                  <strong id="auto-gps-imu-skew">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">雷达 / IMU 时差</span>
+                                  <strong id="auto-lidar-imu-skew">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">数据年龄</span>
+                                  <strong id="auto-sensor-ages">GPS -- / IMU -- / 雷达 --</strong>
+                                </div>
+                              </div>
+
+                              <p class="muted" id="auto-sensor-timing-note" style="margin:0;">
+                                自动工作区会按实测频率对 GPS、IMU、雷达的数据年龄和时差做门控。
+                              </p>
 
                               <div class="avoidance-actions" aria-label="自动任务控制">
                                 <button class="btn-success" type="button" id="auto-task-start-btn">开始任务</button>
@@ -1463,7 +1583,9 @@
 	    const autoWorkspaceDisplayConfig = {
 	      xyLowPassAlpha: 0.22,
 	      staticSpeedThresholdCmS: 2,
-	      staticDisplayUpdateThresholdM: 0.35
+	      staticDisplayUpdateThresholdM: 0.35,
+	      tracePointSpacingM: 0.28,
+	      traceStaticIgnoreThresholdM: 0.55
 	    };
 
 	    const autoWorkspaceState = {
@@ -1475,15 +1597,21 @@
 	      mapProvider: null,
 	      mapExpanded: false,
 	      gpsMarker: null,
+	      originMarker: null,
 	      targetMarker: null,
+	      pendingTargetMarker: null,
 	      rangeCircle: null,
 	      pathPolyline: null,
+	      actualTrackPolyline: null,
 	      latestGps: null,
 	      latestImu: null,
 	      plannedOrigin: null,
 	      destination: null,
+	      pendingDestination: null,
 	      planData: null,
 	      runtime: null,
+	      actualTrackPoints: [],
+	      actualTrackSessionActive: false,
 	      currentMapPoint: null,
 	      latestVehicle: null,
 	      displayedCurrentXY: null,
@@ -1491,7 +1619,9 @@
 	      lastCenteredAt: 0,
 	      lastOriginConfigRefreshAt: 0,
 	      resizeSyncTimerIds: [],
-	      taskRequestPending: false
+	      taskRequestPending: false,
+	      planRequestPending: false,
+	      destinationSelectionActive: false
 	    };
 
 	    function setText(id, value) {
@@ -1612,13 +1742,18 @@
 	      workspaceState.latestDevices = null;
 	      autoWorkspaceState.runtime = null;
 	      autoWorkspaceState.taskRequestPending = false;
+	      autoWorkspaceState.planRequestPending = false;
 	      renderSystemStatus(false);
 	      setSystemMode('STOP');
 	      setText('auto-task-status', '当前未发送自动任务指令。');
-	      setAutoPlannerStatus('等待设置终点 XY 坐标。');
+	      setAutoPlannerStatus('等待设置地图终点。');
 	      setAutoMapCaption('自动工作区地图会随 GPS 实时更新位置，并回显后端保存的目标点与道路路径预览。');
+	      setAutoSelectionHint();
+	      setAutoSelectionPosition('未选择');
 	      setText('auto-gps-status', '等待 GPS');
 	      setText('auto-current-position', '--');
+	      setText('auto-raw-gps-position', '--');
+	      setText('auto-gps-precision', '--');
 	      setText('auto-imu-yaw', '--');
 	      setText('auto-target-position', '未设置');
 	      setText('auto-origin-text', 'XY 原点等待 GPS 有效定位后锁定。');
@@ -1627,6 +1762,11 @@
 	      setText('auto-runtime-remaining', '--');
 	      setText('auto-runtime-heading-error', '--');
 	      setText('auto-runtime-command', '--');
+	      setText('auto-sensor-timing-status', '--');
+	      setText('auto-gps-imu-skew', '--');
+	      setText('auto-lidar-imu-skew', '--');
+	      setText('auto-sensor-ages', 'GPS -- / IMU -- / 雷达 --');
+	      setText('auto-sensor-timing-note', '自动工作区会按实测频率对 GPS、IMU、雷达的数据年龄和时差做门控。');
 	      setText('chip-serial', '串口通信：未启动');
 	      setText('gps-state', defaultDeviceTexts.gps);
 	      setText('imu-state', defaultDeviceTexts.imu);
@@ -1761,6 +1901,11 @@
 	      return `X ${x.toFixed(1)} m / Y ${y.toFixed(1)} m`;
 	    }
 
+	    function autoGpsPrecisionText(horizontalStddevMeters) {
+	      const sigma = finiteNumber(horizontalStddevMeters);
+	      return sigma === null ? '--' : `±${sigma.toFixed(2)} m`;
+	    }
+
 	    function autoOriginText(frame) {
 	      if (!frame || !frame.origin_valid) {
 	        return 'XY 原点等待 GPS 有效定位后锁定。';
@@ -1822,32 +1967,68 @@
 	      return `${speedText} / ${steeringText}${suffix}`;
 	    }
 
-	    function syncAutoDestinationInputs(target) {
-	      if (!target) {
-	        return;
+	    function autoTimingMsText(value) {
+	      const number = finiteNumber(value);
+	      return number === null ? '--' : `${number.toFixed(0)} ms`;
+	    }
+
+	    function autoSensorAgesText(runtime) {
+	      if (!runtime) {
+	        return 'GPS -- / IMU -- / 雷达 --';
 	      }
-	      const xInput = document.getElementById('auto-destination-x');
-	      const yInput = document.getElementById('auto-destination-y');
-	      if (!xInput || !yInput) {
-	        return;
+	      return `GPS ${autoTimingMsText(runtime.gps_age_ms)} / IMU ${autoTimingMsText(runtime.imu_age_ms)} / 雷达 ${autoTimingMsText(runtime.lidar_age_ms)}`;
+	    }
+
+	    function autoTimingStatusText(runtime) {
+	      if (!runtime) {
+	        return '--';
 	      }
-	      if (document.activeElement === xInput || document.activeElement === yInput) {
-	        return;
+	      if (runtime.navigation_timing_ok && runtime.avoidance_timing_ok) {
+	        return '导航正常 / 避障正常';
 	      }
-	      const x = finiteNumber(target.x_m);
-	      const y = finiteNumber(target.y_m);
-	      if (x === null || y === null) {
-	        return;
+	      if (!runtime.navigation_timing_ok && !runtime.avoidance_timing_ok) {
+	        return '导航等待 / 避障等待';
 	      }
-	      const formatInputValue = value => Number(value.toFixed(3)).toString();
-	      const nextX = formatInputValue(x);
-	      const nextY = formatInputValue(y);
-	      if (xInput.value !== nextX) {
-	        xInput.value = nextX;
+	      if (!runtime.navigation_timing_ok) {
+	        return '导航等待时序';
 	      }
-	      if (yInput.value !== nextY) {
-	        yInput.value = nextY;
+	      if (!runtime.avoidance_timing_ok) {
+	        return '避障等待时序';
 	      }
+	      return '--';
+	    }
+
+	    function autoTimingReasonLabel(reason) {
+	      const normalized = typeof reason === 'string' ? reason.trim().toLowerCase() : '';
+	      const labels = {
+	        gps_missing: 'GPS 未到达',
+	        gps_stale: 'GPS 过旧',
+	        imu_missing: 'IMU 未到达',
+	        imu_stale: 'IMU 过旧',
+	        gps_imu_skew: 'GPS/IMU 未对齐',
+	        lidar_missing: '雷达未到达',
+	        lidar_stale: '雷达过旧',
+	        lidar_imu_skew: '雷达/IMU 未对齐'
+	      };
+	      return labels[normalized] || '';
+	    }
+
+	    function autoTimingNoteText(runtime) {
+	      if (!runtime) {
+	        return '自动工作区会按实测频率对 GPS、IMU、雷达的数据年龄和时差做门控。';
+	      }
+	      const navReason = autoTimingReasonLabel(runtime.navigation_timing_reason);
+	      const avoidReason = autoTimingReasonLabel(runtime.avoidance_timing_reason);
+	      if (navReason && avoidReason) {
+	        return `导航链：${navReason}；避障链：${avoidReason}。`;
+	      }
+	      if (navReason) {
+	        return `导航链：${navReason}。`;
+	      }
+	      if (avoidReason) {
+	        return `避障链：${avoidReason}。`;
+	      }
+	      return '导航链与避障链时序都在允许范围内。';
 	    }
 
 	    function rebuildAutoPlanDataFromRuntime(runtime) {
@@ -1918,6 +2099,14 @@
 	      };
 	    }
 
+	    function localXYFromLatLon(latitude, longitude) {
+	      return localXYFromGpsPoint({
+	        valid: true,
+	        latitude,
+	        longitude
+	      });
+	    }
+
 	    function xyDistanceMeters(a, b) {
 	      if (!a || !b) {
 	        return Number.POSITIVE_INFINITY;
@@ -1974,11 +2163,7 @@
 	    }
 
 	    function currentAutoDestinationInput() {
-	      const xInput = document.getElementById('auto-destination-x');
-	      const yInput = document.getElementById('auto-destination-y');
-	      const x = finiteNumber(xInput && xInput.value);
-	      const y = finiteNumber(yInput && yInput.value);
-	      return x === null || y === null ? null : { x_m: x, y_m: y };
+	      return autoWorkspaceState.pendingDestination;
 	    }
 
 	    function setAutoPlanState(text) {
@@ -1986,11 +2171,33 @@
 	    }
 
 	    function setAutoPlannerStatus(text) {
-	      setText('auto-planner-status', text || '等待设置终点 XY 坐标。');
+	      setText('auto-planner-status', text || '等待设置地图终点。');
 	    }
 
 	    function setAutoMapCaption(text) {
 	      setText('auto-map-caption', text || '自动工作区地图会随 GPS 实时更新位置，并回显后端保存的目标点与道路路径预览。');
+	    }
+
+	    function setAutoSelectionHint(text) {
+	      setText(
+	        'auto-selection-hint',
+	        text || '点击“设置终点”后，地图会放大；请在地图上点选终点，再确认终点并规划路径。');
+	    }
+
+	    function setAutoSelectionPosition(text) {
+	      setText('auto-selection-position', text || '未选择');
+	    }
+
+	    function pendingDestinationSummaryText(target) {
+	      if (!target) {
+	        return '未选择';
+	      }
+	      const x = finiteNumber(target.x_m);
+	      const y = finiteNumber(target.y_m);
+	      if (x === null || y === null) {
+	        return '未选择';
+	      }
+	      return `X ${x.toFixed(1)} m / Y ${y.toFixed(1)} m`;
 	    }
 
 	    function setAutoMapEmpty(message) {
@@ -2025,18 +2232,34 @@
 	      const interactionReady =
 	        workspaceState.activeMode === 'AUTO' &&
 	        !workspaceState.switching &&
-	        !(runtime && (runtime.task_running || runtime.awaiting_start_ack));
+	        !(runtime && (runtime.task_running || runtime.awaiting_start_ack)) &&
+	        !autoWorkspaceState.planRequestPending;
 	      const hasPlan = Boolean(
 	        (runtime && runtime.plan_ready) ||
 	        autoWorkspaceState.planData ||
 	        autoWorkspaceState.destination);
-	      const planButton = document.getElementById('auto-plan-route-btn');
+	      const pickButton = document.getElementById('auto-pick-destination-btn');
+	      const confirmButton = document.getElementById('auto-confirm-destination-btn');
+	      const recalibrateButton = document.getElementById('auto-recalibrate-origin-btn');
 	      const clearButton = document.getElementById('auto-clear-route-btn');
-	      if (planButton) {
-	        planButton.disabled = !interactionReady;
+	      if (pickButton) {
+	        pickButton.disabled = !interactionReady;
+	      }
+	      if (confirmButton) {
+	        confirmButton.disabled =
+	          !interactionReady ||
+	          !autoWorkspaceState.pendingDestination ||
+	          !autoWorkspaceState.destinationSelectionActive;
+	      }
+	      if (recalibrateButton) {
+	        recalibrateButton.disabled = !interactionReady;
 	      }
 	      if (clearButton) {
-	        clearButton.disabled = !(interactionReady && hasPlan);
+	        clearButton.disabled = !(
+	          interactionReady &&
+	          (hasPlan ||
+	            autoWorkspaceState.pendingDestination ||
+	            autoWorkspaceState.destinationSelectionActive));
 	      }
 	    }
 
@@ -2046,6 +2269,7 @@
 	      const runtime = autoWorkspaceState.runtime;
 	      const frame = autoCoordinateFrame();
 	      const target =
+	        autoWorkspaceState.pendingDestination ||
 	        autoWorkspaceState.destination ||
 	        (runtime && runtime.plan_ready ? {
 	          latitude: finiteNumber(runtime.destination_latitude),
@@ -2060,18 +2284,41 @@
 	              y_m: finiteNumber(runtime.current_y_m)
 	            }
 	          : null;
+	      const runtimeRawGpsXY =
+	        runtime
+	          ? {
+	              x_m: finiteNumber(runtime.raw_x_m),
+	              y_m: finiteNumber(runtime.raw_y_m)
+	            }
+	          : null;
 	      const currentXY =
 	        runtimeCurrentXY && runtimeCurrentXY.x_m !== null && runtimeCurrentXY.y_m !== null
 	          ? runtimeCurrentXY
 	          : localXYFromGpsPoint(gps);
-	      const displayedCurrentXY = stabilizedAutoCurrentXY(currentXY);
+	      const rawGpsXY =
+	        runtimeRawGpsXY && runtimeRawGpsXY.x_m !== null && runtimeRawGpsXY.y_m !== null
+	          ? runtimeRawGpsXY
+	          : (
+	              gps &&
+	              finiteNumber(gps.raw_latitude) !== null &&
+	              finiteNumber(gps.raw_longitude) !== null
+	                ? localXYFromGpsPoint({
+	                    valid: true,
+	                    latitude: finiteNumber(gps.raw_latitude),
+	                    longitude: finiteNumber(gps.raw_longitude)
+	                  })
+	                : null
+	            );
 	      const remainingDistance =
 	        runtime && runtime.task_running
 	          ? runtime.remaining_distance_m
 	          : (runtime && runtime.plan_ready ? runtime.preview_distance_m : null);
 
 	      let gpsStatusText = '等待 GPS';
-	      if (gps && gps.valid) {
+	      const navigationReason = autoTimingReasonLabel(runtime && runtime.navigation_timing_reason);
+	      if (runtime && !runtime.navigation_timing_ok && navigationReason) {
+	        gpsStatusText = `导航等待 / ${navigationReason}`;
+	      } else if (gps && gps.valid) {
 	        gpsStatusText = frame && frame.origin_valid
 	          ? 'GPS 正常 / XY 原点已锁定'
 	          : 'GPS 正常 / 等待锁定 XY 原点';
@@ -2079,29 +2326,55 @@
 	      setText('auto-gps-status', gpsStatusText);
 	      setText(
 	        'auto-current-position',
-	        displayedCurrentXY ? autoXYText(displayedCurrentXY.x_m, displayedCurrentXY.y_m) : (gps && gps.valid ? '等待 XY 原点' : '--'));
+	        currentXY ? autoXYText(currentXY.x_m, currentXY.y_m) : (gps && gps.valid ? '等待 XY 原点' : '--'));
+	      setText(
+	        'auto-raw-gps-position',
+	        rawGpsXY ? autoXYText(rawGpsXY.x_m, rawGpsXY.y_m) : (gps && (gps.valid || finiteNumber(gps.raw_latitude) !== null) ? '等待 XY 原点' : '--'));
+	      setText(
+	        'auto-gps-precision',
+	        autoGpsPrecisionText(gps && gps.horizontal_stddev_m));
 	      setText(
 	        'auto-imu-yaw',
 	        imu && imu.valid && Number.isFinite(imu.yaw_deg) ? `${imu.yaw_deg.toFixed(1)}°` : '--');
 	      setText(
 	        'auto-target-position',
 	        target ? autoXYText(target.x_m, target.y_m) : '未设置');
+	      setAutoSelectionPosition(pendingDestinationSummaryText(autoWorkspaceState.pendingDestination));
 	      setText('auto-origin-text', autoOriginText(frame));
 	      setText('auto-runtime-phase', autoRuntimePhaseText(runtime));
 	      setText('auto-runtime-remaining', autoDistanceText(remainingDistance));
 	      setText('auto-runtime-heading-error', autoHeadingErrorText(runtime && runtime.heading_error_deg));
 	      setText('auto-runtime-command', autoCommandText(runtime));
+	      setText('auto-sensor-timing-status', autoTimingStatusText(runtime));
+	      setText('auto-gps-imu-skew', autoTimingMsText(runtime && runtime.gps_imu_skew_ms));
+	      setText('auto-lidar-imu-skew', autoTimingMsText(runtime && runtime.lidar_imu_skew_ms));
+	      setText('auto-sensor-ages', autoSensorAgesText(runtime));
+	      setText('auto-sensor-timing-note', autoTimingNoteText(runtime));
 
 	      if (runtime && runtime.task_running) {
 	        setAutoPlanState('任务运行中');
 	      } else if (runtime && runtime.awaiting_start_ack) {
 	        setAutoPlanState('等待启动');
+	      } else if (autoWorkspaceState.destinationSelectionActive && autoWorkspaceState.pendingDestination) {
+	        setAutoPlanState('终点待确认');
+	      } else if (autoWorkspaceState.destinationSelectionActive) {
+	        setAutoPlanState('选择终点中');
 	      } else if ((autoWorkspaceState.planData && autoWorkspaceState.destination) || (runtime && runtime.plan_ready)) {
 	        setAutoPlanState('路径已规划');
 	      } else if (gps && gps.valid) {
 	        setAutoPlanState('已定位');
 	      } else {
 	        setAutoPlanState('等待定位');
+	      }
+
+	      if (runtime && runtime.task_running) {
+	        setAutoSelectionHint('自动任务运行中；如需重新选点，请先停止任务。');
+	      } else if (autoWorkspaceState.destinationSelectionActive && autoWorkspaceState.pendingDestination) {
+	        setAutoSelectionHint('终点已在地图上标出；确认终点后才会向后端发起路径规划。');
+	      } else if (autoWorkspaceState.destinationSelectionActive) {
+	        setAutoSelectionHint('地图已进入选点模式；请在地图上单击你想去的终点位置。');
+	      } else {
+	        setAutoSelectionHint();
 	      }
 	    }
 
@@ -2291,11 +2564,15 @@
 	      autoWorkspaceState.mapReady = false;
 	      autoWorkspaceState.mapProvider = null;
 	      autoWorkspaceState.gpsMarker = null;
+	      autoWorkspaceState.originMarker = null;
 	      autoWorkspaceState.targetMarker = null;
+	      autoWorkspaceState.pendingTargetMarker = null;
 	      autoWorkspaceState.rangeCircle = null;
 	      autoWorkspaceState.pathPolyline = null;
+	      autoWorkspaceState.actualTrackPolyline = null;
 	      autoWorkspaceState.currentMapPoint = null;
 	      autoWorkspaceState.lastCenteredAt = 0;
+	      autoWorkspaceState.destinationSelectionActive = false;
 	      autoWorkspaceState.mapScriptPromise = null;
 	    }
 
@@ -2395,6 +2672,30 @@
 	      }
 	    }
 
+	    function setAutoMapZoom(point, zoomLevel) {
+	      if (!autoWorkspaceState.map || !point) {
+	        return;
+	      }
+	      const zoom = Number.isFinite(Number(zoomLevel)) ? Number(zoomLevel) : 19;
+	      if (autoWorkspaceState.mapProvider === 'osm') {
+	        if (typeof autoWorkspaceState.map.setView === 'function') {
+	          autoWorkspaceState.map.setView(point, zoom);
+	          return;
+	        }
+	        if (typeof autoWorkspaceState.map.panTo === 'function') {
+	          autoWorkspaceState.map.panTo(point);
+	        }
+	        return;
+	      }
+	      if (typeof autoWorkspaceState.map.centerAndZoom === 'function') {
+	        autoWorkspaceState.map.centerAndZoom(point, zoom);
+	        return;
+	      }
+	      if (typeof autoWorkspaceState.map.panTo === 'function') {
+	        autoWorkspaceState.map.panTo(point);
+	      }
+	    }
+
 	    function refreshAutoMapSize() {
 	      if (!autoWorkspaceState.map) {
 	        return;
@@ -2407,6 +2708,251 @@
 	      }
 	      if (typeof autoWorkspaceState.map.checkResize === 'function') {
 	        autoWorkspaceState.map.checkResize();
+	      }
+	    }
+
+	    function resetAutoPendingDestination() {
+	      autoWorkspaceState.pendingDestination = null;
+	      removeMapOverlay(autoWorkspaceState.pendingTargetMarker);
+	      autoWorkspaceState.pendingTargetMarker = null;
+	    }
+
+	    function resetAutoDrivenTrack() {
+	      removeMapOverlay(autoWorkspaceState.actualTrackPolyline);
+	      autoWorkspaceState.actualTrackPolyline = null;
+	      autoWorkspaceState.actualTrackPoints = [];
+	      autoWorkspaceState.actualTrackSessionActive = false;
+	    }
+
+	    function syncAutoDrivenTrackOverlay() {
+	      const provider = currentAutoMapProvider();
+	      const L = provider === 'osm' ? getLeafletNamespace() : null;
+	      const TMap = provider === 'tianditu' ? getTiandituNamespace() : null;
+	      removeMapOverlay(autoWorkspaceState.actualTrackPolyline);
+	      autoWorkspaceState.actualTrackPolyline = null;
+	      if (!autoWorkspaceState.mapReady || autoWorkspaceState.actualTrackPoints.length < 2) {
+	        return;
+	      }
+	      if (provider === 'osm' && !L) {
+	        return;
+	      }
+	      if (provider === 'tianditu' && !TMap) {
+	        return;
+	      }
+
+	      const points = autoWorkspaceState.actualTrackPoints
+	        .map(point => createMapPoint(point.longitude, point.latitude))
+	        .filter(Boolean);
+	      if (points.length < 2) {
+	        return;
+	      }
+
+	      autoWorkspaceState.actualTrackPolyline =
+	        provider === 'osm'
+	          ? L.polyline(points, {
+	              color: '#2fbf71',
+	              weight: 4,
+	              opacity: 0.92
+	            })
+	          : new TMap.Polyline(points, {
+	              color: '#2fbf71',
+	              weight: 4,
+	              opacity: 0.92
+	            });
+	      addMapOverlay(autoWorkspaceState.actualTrackPolyline);
+	    }
+
+	    function syncAutoOriginOverlay(runtime) {
+	      const provider = currentAutoMapProvider();
+	      const L = provider === 'osm' ? getLeafletNamespace() : null;
+	      const TMap = provider === 'tianditu' ? getTiandituNamespace() : null;
+	      removeMapOverlay(autoWorkspaceState.originMarker);
+	      autoWorkspaceState.originMarker = null;
+	      if (!autoWorkspaceState.mapReady) {
+	        return;
+	      }
+
+	      const originLatitude = finiteNumber(runtime && runtime.origin_valid ? runtime.origin_latitude : null);
+	      const originLongitude = finiteNumber(runtime && runtime.origin_valid ? runtime.origin_longitude : null);
+	      if (originLatitude === null || originLongitude === null) {
+	        return;
+	      }
+
+	      const originPoint = createMapPoint(originLongitude, originLatitude);
+	      if (!originPoint) {
+	        return;
+	      }
+
+	      if (provider === 'osm') {
+	        if (!L) {
+	          return;
+	        }
+	        autoWorkspaceState.originMarker = L.circleMarker(originPoint, {
+	          radius: 17,
+	          color: '#7dd3fc',
+	          weight: 2,
+	          opacity: 0.9,
+	          fillOpacity: 0,
+	          dashArray: '5 4'
+	        });
+	      } else {
+	        if (!TMap || typeof TMap.Circle !== 'function') {
+	          return;
+	        }
+	        autoWorkspaceState.originMarker = new TMap.Circle(originPoint, 1.6, {
+	          color: '#7dd3fc',
+	          weight: 2,
+	          opacity: 0.85,
+	          fillOpacity: 0
+	        });
+	      }
+	      addMapOverlay(autoWorkspaceState.originMarker);
+	    }
+
+	    function updateAutoDrivenTrack(runtime) {
+	      const track = Array.isArray(runtime && runtime.actual_track)
+	        ? runtime.actual_track
+	            .map(point => ({
+	              latitude: finiteNumber(point && point.latitude),
+	              longitude: finiteNumber(point && point.longitude),
+	              x_m: finiteNumber(point && point.x_m),
+	              y_m: finiteNumber(point && point.y_m)
+	            }))
+	            .filter(point =>
+	              point.latitude !== null &&
+	              point.longitude !== null &&
+	              point.x_m !== null &&
+	              point.y_m !== null)
+	        : [];
+	      autoWorkspaceState.actualTrackSessionActive =
+	        Boolean(runtime && (runtime.awaiting_start_ack || runtime.task_running));
+	      autoWorkspaceState.actualTrackPoints = track;
+	      if (!track.length) {
+	        removeMapOverlay(autoWorkspaceState.actualTrackPolyline);
+	        autoWorkspaceState.actualTrackPolyline = null;
+	        return;
+	      }
+	      syncAutoDrivenTrackOverlay();
+	    }
+
+	    function drawAutoPendingDestinationMarker() {
+	      removeMapOverlay(autoWorkspaceState.pendingTargetMarker);
+	      autoWorkspaceState.pendingTargetMarker = null;
+	      if (!autoWorkspaceState.mapReady || !autoWorkspaceState.pendingDestination) {
+	        return;
+	      }
+	      const point = createMapPoint(
+	        autoWorkspaceState.pendingDestination.longitude,
+	        autoWorkspaceState.pendingDestination.latitude);
+	      if (!point) {
+	        return;
+	      }
+	      if (autoWorkspaceState.mapProvider === 'osm') {
+	        const L = getLeafletNamespace();
+	        if (!L) {
+	          return;
+	        }
+	        autoWorkspaceState.pendingTargetMarker = L.circleMarker(point, {
+	          radius: 10,
+	          color: '#ff9f1c',
+	          weight: 4,
+	          fillColor: '#fff7ed',
+	          fillOpacity: 1
+	        });
+	      } else {
+	        const TMap = getTiandituNamespace();
+	        if (!TMap || typeof TMap.Marker !== 'function') {
+	          return;
+	        }
+	        autoWorkspaceState.pendingTargetMarker = new TMap.Marker(point);
+	      }
+	      addMapOverlay(autoWorkspaceState.pendingTargetMarker);
+	    }
+
+	    function setAutoDestinationSelectionActive(active) {
+	      autoWorkspaceState.destinationSelectionActive = Boolean(active);
+	      const shell = document.getElementById('auto-map-shell');
+	      if (shell) {
+	        shell.classList.toggle('selecting', autoWorkspaceState.destinationSelectionActive);
+	      }
+	      renderAutoPlannerButtonState();
+	      renderAutoWorkspaceSummary();
+	    }
+
+	    function applyAutoPendingDestination(latitude, longitude) {
+	      const xY = localXYFromLatLon(latitude, longitude);
+	      if (!xY) {
+	        setAutoPlannerStatus('当前 XY 原点不可用，暂时无法把地图点击位置换算成终点。');
+	        return;
+	      }
+	      autoWorkspaceState.pendingDestination = {
+	        latitude,
+	        longitude,
+	        x_m: xY.x_m,
+	        y_m: xY.y_m
+	      };
+	      drawAutoPendingDestinationMarker();
+	      setAutoPlannerStatus(
+	        `终点已选中：X ${xY.x_m.toFixed(1)} m / Y ${xY.y_m.toFixed(1)} m。确认终点后再规划路径。`);
+	      setAutoMapCaption('地图已标出待确认终点；确认前不会向后端发送路径规划请求。');
+	      renderAutoWorkspaceSummary();
+	    }
+
+	    function extractMapClickLatLng(event) {
+	      if (!event) {
+	        return null;
+	      }
+	      if (event.latlng &&
+	          Number.isFinite(Number(event.latlng.lat)) &&
+	          Number.isFinite(Number(event.latlng.lng))) {
+	        return {
+	          latitude: Number(event.latlng.lat),
+	          longitude: Number(event.latlng.lng)
+	        };
+	      }
+	      const point = event.lnglat || event.latLng || event.point || null;
+	      if (point &&
+	          Number.isFinite(Number(point.lat)) &&
+	          Number.isFinite(Number(point.lng))) {
+	        return {
+	          latitude: Number(point.lat),
+	          longitude: Number(point.lng)
+	        };
+	      }
+	      if (point &&
+	          typeof point.getLat === 'function' &&
+	          typeof point.getLng === 'function') {
+	        return {
+	          latitude: Number(point.getLat()),
+	          longitude: Number(point.getLng())
+	        };
+	      }
+	      return null;
+	    }
+
+	    function bindAutoMapSelectionHandlers() {
+	      if (!autoWorkspaceState.map) {
+	        return;
+	      }
+	      const handler = event => {
+	        if (!autoWorkspaceState.destinationSelectionActive) {
+	          return;
+	        }
+	        const latLng = extractMapClickLatLng(event);
+	        if (!latLng) {
+	          setAutoPlannerStatus('地图点击位置解析失败，请再点一次终点。');
+	          return;
+	        }
+	        applyAutoPendingDestination(latLng.latitude, latLng.longitude);
+	      };
+	      if (autoWorkspaceState.mapProvider === 'osm') {
+	        if (typeof autoWorkspaceState.map.on === 'function') {
+	          autoWorkspaceState.map.on('click', handler);
+	        }
+	        return;
+	      }
+	      if (typeof autoWorkspaceState.map.addEventListener === 'function') {
+	        autoWorkspaceState.map.addEventListener('click', handler);
 	      }
 	    }
 
@@ -2473,6 +3019,7 @@
 	            : new TMap.Marker(targetPoint);
 	        addMapOverlay(autoWorkspaceState.targetMarker);
 	      }
+	      drawAutoPendingDestinationMarker();
 	      setMapViewport(points);
 	    }
 
@@ -2481,16 +3028,16 @@
 	      removeMapOverlay(autoWorkspaceState.targetMarker);
 	      autoWorkspaceState.pathPolyline = null;
 	      autoWorkspaceState.targetMarker = null;
+	      resetAutoDrivenTrack();
 	      autoWorkspaceState.plannedOrigin = null;
 	      autoWorkspaceState.destination = null;
 	      autoWorkspaceState.planData = null;
+	      resetAutoPendingDestination();
+	      setAutoDestinationSelectionActive(false);
 	      if (resetDestinationInputs) {
-	        const xInput = document.getElementById('auto-destination-x');
-	        const yInput = document.getElementById('auto-destination-y');
-	        if (xInput) xInput.value = '';
-	        if (yInput) yInput.value = '';
+	        setAutoSelectionPosition('未选择');
 	      }
-	      setAutoPlannerStatus('已清除自动工作区路径预览。');
+	      setAutoPlannerStatus('已清除自动工作区路径预览与待确认终点。');
 	      setAutoMapCaption('自动工作区地图会保留实时定位，道路路径预览已清除。');
 	      renderAutoWorkspaceSummary();
 	    }
@@ -2548,15 +3095,26 @@
 	              fillOpacity: 0.08
 	            });
 	      addMapOverlay(autoWorkspaceState.rangeCircle);
+	      syncAutoOriginOverlay(autoWorkspaceState.runtime);
 
 	      const now = Date.now();
-	      if (workspaceState.activeMode === 'AUTO' && (autoWorkspaceState.lastCenteredAt === 0 || now - autoWorkspaceState.lastCenteredAt >= 1000)) {
+	      if (
+	        workspaceState.activeMode === 'AUTO' &&
+	        !autoWorkspaceState.destinationSelectionActive &&
+	        (autoWorkspaceState.lastCenteredAt === 0 || now - autoWorkspaceState.lastCenteredAt >= 1000)
+	      ) {
 	        recenterAutoMap(currentPoint);
 	        autoWorkspaceState.lastCenteredAt = now;
 	      }
 
 	      if (autoWorkspaceState.planData && autoWorkspaceState.destination && !autoWorkspaceState.pathPolyline) {
 	        syncAutoRoutePreview();
+	      }
+	      if (autoWorkspaceState.actualTrackPoints.length && !autoWorkspaceState.actualTrackPolyline) {
+	        syncAutoDrivenTrackOverlay();
+	      }
+	      if (autoWorkspaceState.pendingDestination && !autoWorkspaceState.pendingTargetMarker) {
+	        drawAutoPendingDestinationMarker();
 	      }
 	    }
 
@@ -2612,6 +3170,7 @@
 	      autoWorkspaceState.map = map;
 	      autoWorkspaceState.mapReady = true;
 	      autoWorkspaceState.mapProvider = provider;
+	      bindAutoMapSelectionHandlers();
 	      refreshAutoMapSize();
 	      setAutoMapCaption(
 	        provider === 'osm'
@@ -2668,6 +3227,16 @@
 	        Number.isFinite(Number(gps.longitude));
 	      const runtimeLatitude = finiteNumber(autoRuntime && autoRuntime.current_latitude);
 	      const runtimeLongitude = finiteNumber(autoRuntime && autoRuntime.current_longitude);
+	      const runtimeRawLatitude = finiteNumber(autoRuntime && autoRuntime.raw_latitude);
+	      const runtimeRawLongitude = finiteNumber(autoRuntime && autoRuntime.raw_longitude);
+	      const runtimeRawXM = finiteNumber(autoRuntime && autoRuntime.raw_x_m);
+	      const runtimeRawYM = finiteNumber(autoRuntime && autoRuntime.raw_y_m);
+	      const runtimeFilteredGpsXM = finiteNumber(autoRuntime && autoRuntime.filtered_gps_x_m);
+	      const runtimeFilteredGpsYM = finiteNumber(autoRuntime && autoRuntime.filtered_gps_y_m);
+	      const runtimeGpsStddev = finiteNumber(autoRuntime && autoRuntime.gps_horizontal_stddev_m);
+	      const fallbackRawLatitude = finiteNumber(gps && gps.raw_latitude);
+	      const fallbackRawLongitude = finiteNumber(gps && gps.raw_longitude);
+	      const fallbackGpsStddev = finiteNumber(gps && gps.horizontal_stddev_m);
 	      const runtimeGpsValid =
 	        autoRuntime &&
 	        autoRuntime.gps_valid &&
@@ -2677,12 +3246,26 @@
 	        valid: true,
 	        latitude: runtimeLatitude,
 	        longitude: runtimeLongitude,
-	        altitude_m: finiteNumber(gps && gps.altitude_m)
+	        altitude_m: finiteNumber(gps && gps.altitude_m),
+	        raw_latitude: runtimeRawLatitude !== null ? runtimeRawLatitude : fallbackRawLatitude,
+	        raw_longitude: runtimeRawLongitude !== null ? runtimeRawLongitude : fallbackRawLongitude,
+	        raw_x_m: runtimeRawXM,
+	        raw_y_m: runtimeRawYM,
+	        filtered_gps_x_m: runtimeFilteredGpsXM,
+	        filtered_gps_y_m: runtimeFilteredGpsYM,
+	        horizontal_stddev_m: runtimeGpsStddev !== null ? runtimeGpsStddev : fallbackGpsStddev
 	      } : (gpsValid ? {
 	        valid: true,
 	        latitude: Number(gps.latitude),
 	        longitude: Number(gps.longitude),
-	        altitude_m: finiteNumber(gps.altitude_m)
+	        altitude_m: finiteNumber(gps.altitude_m),
+	        raw_latitude: fallbackRawLatitude,
+	        raw_longitude: fallbackRawLongitude,
+	        raw_x_m: null,
+	        raw_y_m: null,
+	        filtered_gps_x_m: null,
+	        filtered_gps_y_m: null,
+	        horizontal_stddev_m: fallbackGpsStddev
 	      } : { valid: false });
 	      const runtimeYaw = finiteNumber(autoRuntime && autoRuntime.current_yaw_deg);
 	      const runtimeHeadingValid =
@@ -2700,6 +3283,7 @@
 	        pitch_deg: finiteNumber(imu.pitch_deg),
 	        yaw_deg: finiteNumber(imu.yaw_deg)
 	      } : { valid: false });
+	      updateAutoDrivenTrack(autoRuntime);
 	      renderAutoWorkspaceSummary();
 	      if (runtimeGpsValid || gpsValid) {
 	        const frame = autoCoordinateFrame();
@@ -2873,7 +3457,6 @@
 	          y_m: finiteNumber(autoWorkspace.destination_y_m)
 	        };
 	        rebuildAutoPlanDataFromRuntime(autoWorkspace);
-	        syncAutoDestinationInputs(autoWorkspaceState.destination);
 	      } else if (
 	        autoWorkspace &&
 	        !autoWorkspace.plan_ready &&
@@ -2919,10 +3502,10 @@
 	        } else if (autoWorkspace.message) {
 	          setText('auto-task-status', autoWorkspace.message);
 	        }
-	        if (autoWorkspace.plan_ready) {
+	        if (autoWorkspace.plan_ready && !autoWorkspaceState.destinationSelectionActive) {
 	          setAutoPlannerStatus(`后端已保存道路路径。${targetText}${plannerRemaining}`.trim());
-	        } else if (!autoWorkspace.plan_ready && !autoWorkspace.task_running && !autoWorkspaceState.planData) {
-	          setAutoPlannerStatus('等待设置终点 XY 坐标。');
+	        } else if (!autoWorkspace.plan_ready && !autoWorkspace.task_running && !autoWorkspaceState.planData && !autoWorkspaceState.destinationSelectionActive) {
+	          setAutoPlannerStatus('等待设置地图终点。');
 	        }
 	      }
 	      renderKeyDisplay(state && state.key_display ? state.key_display : null);
@@ -3351,6 +3934,8 @@
 	      const config = modeLabels[mode] || modeLabels.STOP;
 	      workspaceState.activeMode = mode;
 	      if (mode !== 'AUTO') {
+	        resetAutoPendingDestination();
+	        setAutoDestinationSelectionActive(false);
 	        setAutoMapExpanded(false);
 	      }
 	      document.getElementById('mode-text').textContent = config.text;
@@ -3616,68 +4201,103 @@
     }
 
 	    function initAutoWorkspaceControls() {
-	      const xInput = document.getElementById('auto-destination-x');
-	      const yInput = document.getElementById('auto-destination-y');
-	      const planButton = document.getElementById('auto-plan-route-btn');
+	      const pickButton = document.getElementById('auto-pick-destination-btn');
+	      const confirmButton = document.getElementById('auto-confirm-destination-btn');
+	      const recalibrateButton = document.getElementById('auto-recalibrate-origin-btn');
 	      const clearButton = document.getElementById('auto-clear-route-btn');
 
-	      if (planButton) {
-	        planButton.addEventListener('click', async () => {
+	      if (pickButton) {
+	        pickButton.addEventListener('click', async () => {
 	          if (workspaceState.activeMode !== 'AUTO' || workspaceState.switching) {
 	            setAutoPlannerStatus(
 	              workspaceState.switching
-	                ? '正在切换到自动工作区，请稍后再规划路径。'
-	                : '请先进入自动工作区，再进行路径规划。');
-	            return;
-	          }
-
-	          const xMeters = finiteNumber(xInput && xInput.value);
-	          const yMeters = finiteNumber(yInput && yInput.value);
-	          if (xMeters === null || yMeters === null) {
-	            setAutoPlannerStatus('请先填写有效的终点 XY 坐标。');
+	                ? '正在切换到自动工作区，请稍后再设置终点。'
+	                : '请先进入自动工作区，再设置地图终点。');
 	            return;
 	          }
 
 	          const gps = autoWorkspaceState.latestGps;
 	          if (!gps || !gps.valid) {
-	            setAutoPlannerStatus('当前 GPS 尚未就绪，暂时无法以车辆当前位置生成路径。');
+	            setAutoPlannerStatus('当前 GPS 尚未就绪，暂时无法进入地图选点。');
 	            return;
 	          }
 
-	          const config = await fetchAutoWorkspaceConfig(true);
-	          const frame = config && config.coordinate_frame ? config.coordinate_frame : null;
-	          if (!frame || !frame.origin_valid) {
-	            setAutoPlannerStatus('GPS 已有数据，但自动工作区 XY 原点尚未锁定，请稍后重试。');
+	          try {
+	            const config = await fetchAutoWorkspaceConfig(true);
+	            const frame = config && config.coordinate_frame ? config.coordinate_frame : null;
+	            if (!frame || !frame.origin_valid) {
+	              setAutoPlannerStatus('GPS 已有数据，但自动工作区 XY 原点尚未锁定，请稍后重试。');
+	              return;
+	            }
+	            const ready = await ensureAutoWorkspaceMapReady();
+	            if (!ready) {
+	              setAutoPlannerStatus('地图尚未就绪，暂时无法进入选点模式。');
+	              return;
+	            }
+	            resetAutoPendingDestination();
+	            setAutoDestinationSelectionActive(true);
+	            setAutoMapExpanded(true);
+	            if (autoWorkspaceState.currentMapPoint) {
+	              setAutoMapZoom(autoWorkspaceState.currentMapPoint, 19);
+	            }
+	            setAutoPlannerStatus('地图已进入终点选择模式，请在地图上单击目标位置。');
+	            setAutoMapCaption('请在地图上点选终点；橙色标记出现后，再点击“确认终点并规划”。');
+	          } catch (error) {
+	            setAutoPlannerStatus(`进入地图选点失败：${error.message}`);
+	          }
+	        });
+	      }
+
+	      if (confirmButton) {
+	        confirmButton.addEventListener('click', async () => {
+	          if (workspaceState.activeMode !== 'AUTO' || workspaceState.switching) {
+	            setAutoPlannerStatus(
+	              workspaceState.switching
+	                ? '正在切换到自动工作区，请稍后再确认终点。'
+	                : '请先进入自动工作区，再确认终点。');
+	            return;
+	          }
+	          if (!autoWorkspaceState.destinationSelectionActive || !autoWorkspaceState.pendingDestination) {
+	            setAutoPlannerStatus('请先点击“设置终点”，并在地图上选中一个终点。');
 	            return;
 	          }
 
-	          setAutoPlannerStatus('自动工作区正在请求后端生成道路路径...');
+	          const pending = autoWorkspaceState.pendingDestination;
+	          autoWorkspaceState.planRequestPending = true;
+	          renderAutoPlannerButtonState();
+	          setAutoPlannerStatus('正在根据已确认终点向后端请求道路路径...');
 	          try {
 	            const result = await postJson('/api/auto/plan_preview', {
-	              x_m: xMeters,
-	              y_m: yMeters
+	              x_m: pending.x_m,
+	              y_m: pending.y_m
 	            });
+	            resetAutoDrivenTrack();
 	            autoWorkspaceState.plannedOrigin = result.origin || null;
 	            autoWorkspaceState.destination = result.destination || {
-	              x_m: xMeters,
-	              y_m: yMeters
+	              latitude: pending.latitude,
+	              longitude: pending.longitude,
+	              x_m: pending.x_m,
+	              y_m: pending.y_m
 	            };
 	            autoWorkspaceState.planData = result;
+	            resetAutoPendingDestination();
+	            setAutoDestinationSelectionActive(false);
 	            renderAutoWorkspaceSummary();
 	            const distance = finiteNumber(result.distance_m);
 	            const bearing = finiteNumber(result.bearing_deg);
 	            setAutoPlannerStatus(
-	              `后端道路路径已生成：终点 X ${xMeters.toFixed(1)} m / Y ${yMeters.toFixed(1)} m，路线 ${distance === null ? '--' : `${distance.toFixed(1)} m`}，航向 ${bearing === null ? '--' : `${bearing.toFixed(1)}°`}。`);
+	              `后端道路路径已生成：终点 X ${pending.x_m.toFixed(1)} m / Y ${pending.y_m.toFixed(1)} m，路线 ${distance === null ? '--' : `${distance.toFixed(1)} m`}，航向 ${bearing === null ? '--' : `${bearing.toFixed(1)}°`}。`);
 	            setAutoMapCaption('当前显示的是自动工作区后端道路路径；开始任务后会按 GPS / IMU 沿路径跟踪，并在前向近障时切入避障链。');
-
 	            const ready = await ensureAutoWorkspaceMapReady();
 	            if (ready) {
 	              syncAutoRoutePreview();
 	            }
 	            await refreshDashboardState();
 	          } catch (error) {
-	            autoWorkspaceState.planData = null;
 	            setAutoPlannerStatus(`自动工作区路径规划失败：${error.message}`);
+	          } finally {
+	            autoWorkspaceState.planRequestPending = false;
+	            renderAutoPlannerButtonState();
 	          }
 	        });
 	      }
@@ -3700,6 +4320,35 @@
 	          }
 	        });
 	      }
+
+	      if (recalibrateButton) {
+	        recalibrateButton.addEventListener('click', async () => {
+	          if (workspaceState.activeMode !== 'AUTO' || workspaceState.switching) {
+	            setAutoPlannerStatus(
+	              workspaceState.switching
+	                ? '正在切换到自动工作区，请稍后再重新标定原点。'
+	                : '请先进入自动工作区，再重新标定 GPS 原点。');
+	            return;
+	          }
+
+	          autoWorkspaceState.planRequestPending = true;
+	          renderAutoPlannerButtonState();
+	          setAutoPlannerStatus('正在重置自动工作区 GPS 原点，并清除当前路径...');
+	          try {
+	            const result = await postJson('/api/auto/recalibrate_origin', {});
+	            clearAutoRoutePreview(true);
+	            setAutoPlannerStatus(result.message || '自动工作区 GPS 原点已重置。');
+	            setAutoMapCaption('自动工作区 XY 原点已重置；请保持车辆静止，等待 GPS 重新锁定后再规划路径。');
+	            await fetchAutoWorkspaceConfig(true).catch(() => {});
+	            await refreshDashboardState();
+	          } catch (error) {
+	            setAutoPlannerStatus(`自动工作区重新标定原点失败：${error.message}`);
+	          } finally {
+	            autoWorkspaceState.planRequestPending = false;
+	            renderAutoPlannerButtonState();
+	          }
+	        });
+	      }
 	    }
 
 	    function initAutoMapExpandControls() {
@@ -3718,6 +4367,14 @@
 	      }, true);
 
 	      document.addEventListener('keydown', event => {
+	        if (event.key === 'Escape' && autoWorkspaceState.destinationSelectionActive) {
+	          event.preventDefault();
+	          resetAutoPendingDestination();
+	          setAutoDestinationSelectionActive(false);
+	          setAutoPlannerStatus('已退出终点选择模式。');
+	          setAutoMapCaption('自动工作区地图会随 GPS 实时更新位置，并回显后端保存的目标点与道路路径预览。');
+	          return;
+	        }
 	        if (event.key === 'Escape' && autoWorkspaceState.mapExpanded) {
 	          event.preventDefault();
 	          setAutoMapExpanded(false);
@@ -3760,8 +4417,8 @@
       });
     }
 
-    function initSystemStart() {
-      const button = document.getElementById('system-start-btn');
+    function initVehicleEmergencyRelease() {
+      const button = document.getElementById('vehicle-emergency-release-btn');
       if (!button) return;
       button.addEventListener('click', async () => {
         try {
@@ -3775,22 +4432,16 @@
           }
           const releaseResult = await postJson('/api/system/emergency_release', {});
           if (systemState && systemBadge) {
-            systemState.textContent = releaseResult.message || '急停已解除';
-            systemBadge.textContent = 'STARTING';
-            systemBadge.classList.add('warn');
-          }
-          const startResult = await postJson('/api/system/start', {});
-          if (systemState && systemBadge) {
-            systemState.textContent = startResult.message || '系统启动已触发';
-            systemBadge.textContent = 'STARTING';
+            systemState.textContent = releaseResult.message || '车辆急停已解除';
+            systemBadge.textContent = 'READY';
             systemBadge.classList.add('warn');
           }
         } catch (error) {
-          console.error('system start or emergency release failed', error);
+          console.error('vehicle emergency release failed', error);
           const systemState = document.getElementById('system-state');
           const systemBadge = document.getElementById('system-badge');
           if (systemState && systemBadge) {
-            systemState.textContent = '开始任务失败';
+            systemState.textContent = '车辆解除急停失败';
             systemBadge.textContent = 'ERROR';
             systemBadge.classList.add('warn');
           }
@@ -3800,8 +4451,8 @@
       });
     }
 
-    function initEmergencyStop() {
-      const button = document.getElementById('system-emergency-stop-btn');
+    function initVehicleEmergencyStop() {
+      const button = document.getElementById('vehicle-emergency-stop-btn');
       if (!button) return;
       button.addEventListener('click', async () => {
         try {
@@ -3809,24 +4460,94 @@
           const systemState = document.getElementById('system-state');
           const systemBadge = document.getElementById('system-badge');
           if (systemState && systemBadge) {
-            systemState.textContent = '紧急停止中';
-            systemBadge.textContent = 'STOPPING';
+            systemState.textContent = '车辆紧急停止中';
+            systemBadge.textContent = 'ESTOP';
             systemBadge.classList.add('warn');
           }
           const result = await postJson('/api/system/emergency_stop', {});
           if (systemState && systemBadge) {
-            systemState.textContent = result.message || '急停已触发';
+            systemState.textContent = result.message || '车辆急停已触发';
             systemBadge.textContent = 'ESTOP';
             systemBadge.classList.add('warn');
           }
           workspaceState.modeInitialized = true;
           setSystemMode('STOP');
         } catch (error) {
-          console.error('emergency stop failed', error);
+          console.error('vehicle emergency stop failed', error);
           const systemState = document.getElementById('system-state');
           const systemBadge = document.getElementById('system-badge');
           if (systemState && systemBadge) {
-            systemState.textContent = '紧急停止失败';
+            systemState.textContent = '车辆紧急停止失败';
+            systemBadge.textContent = 'ERROR';
+            systemBadge.classList.add('warn');
+          }
+        } finally {
+          button.disabled = false;
+        }
+      });
+    }
+
+    function initSensorsStart() {
+      const button = document.getElementById('sensors-start-btn');
+      if (!button) return;
+      button.addEventListener('click', async () => {
+        try {
+          button.disabled = true;
+          const systemState = document.getElementById('system-state');
+          const systemBadge = document.getElementById('system-badge');
+          if (systemState && systemBadge) {
+            systemState.textContent = '传感器开启中';
+            systemBadge.textContent = 'SENSORS';
+            systemBadge.classList.add('warn');
+          }
+          const result = await postJson('/api/system/sensors_start', {});
+          if (systemState && systemBadge) {
+            systemState.textContent = result.message || '传感器开启已触发';
+            systemBadge.textContent = 'SENSORS';
+            systemBadge.classList.add('warn');
+          }
+        } catch (error) {
+          console.error('sensors start failed', error);
+          const systemState = document.getElementById('system-state');
+          const systemBadge = document.getElementById('system-badge');
+          if (systemState && systemBadge) {
+            systemState.textContent = '传感器开启失败';
+            systemBadge.textContent = 'ERROR';
+            systemBadge.classList.add('warn');
+          }
+        } finally {
+          button.disabled = false;
+        }
+      });
+    }
+
+    function initSensorsStop() {
+      const button = document.getElementById('sensors-stop-btn');
+      if (!button) return;
+      button.addEventListener('click', async () => {
+        try {
+          button.disabled = true;
+          const systemState = document.getElementById('system-state');
+          const systemBadge = document.getElementById('system-badge');
+          if (systemState && systemBadge) {
+            systemState.textContent = '传感器停止中';
+            systemBadge.textContent = 'SENSORS';
+            systemBadge.classList.add('warn');
+          }
+          const result = await postJson('/api/system/sensors_stop', {});
+          if (systemState && systemBadge) {
+            systemState.textContent = result.message || '传感器已停止';
+            systemBadge.textContent = result.ok ? 'OFFLINE' : 'ERROR';
+            systemBadge.classList.add('warn');
+          }
+          workspaceState.modeInitialized = true;
+          setSystemMode('STOP');
+        } catch (error) {
+          console.error('sensors stop failed', error);
+          const systemState = document.getElementById('system-state');
+          const systemBadge = document.getElementById('system-badge');
+          if (systemState && systemBadge) {
+            systemState.textContent = '传感器停止失败';
             systemBadge.textContent = 'ERROR';
             systemBadge.classList.add('warn');
           }
@@ -3848,9 +4569,11 @@
       initAutoWorkspaceControls();
       initAutoMapExpandControls();
       initAvoidanceTaskControls();
-      initSystemRestart();
-      initSystemStart();
-      initEmergencyStop();
-	  </script>
+	      initSystemRestart();
+	      initVehicleEmergencyRelease();
+	      initVehicleEmergencyStop();
+	      initSensorsStart();
+	      initSensorsStop();
+		  </script>
 </body>
 </html>
