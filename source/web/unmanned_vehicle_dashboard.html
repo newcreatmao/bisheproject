@@ -759,6 +759,10 @@
       gap: 12px;
     }
 
+    .auto-lite-hidden {
+      display: none !important;
+    }
+
     .auto-map-head {
       display: flex;
       justify-content: space-between;
@@ -1015,6 +1019,13 @@
       line-height: 1.45;
     }
 
+    .auto-debug-text {
+      white-space: pre-line;
+      font-family: "JetBrains Mono", "Fira Code", monospace;
+      font-size: 13px !important;
+      line-height: 1.55 !important;
+    }
+
     .lidar-sector-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1266,7 +1277,7 @@
                             </div>
 
                             <div class="auto-task-grid">
-                              <div class="auto-summary-grid">
+                              <div class="auto-summary-grid auto-lite-hidden">
                                 <div class="auto-summary-card">
                                   <span class="label">GPS 状态</span>
                                   <strong id="auto-gps-status">等待 GPS</strong>
@@ -1299,7 +1310,7 @@
                               </div>
 
                               <p class="muted" id="auto-origin-text" style="margin:0;">XY 原点等待 GPS 有效定位后锁定。</p>
-                              <p class="muted" id="auto-selection-hint" style="margin:0;">点击“设置终点”后，地图会放大；请在地图上点选终点，再确认终点并规划路径。</p>
+                              <p class="muted auto-lite-hidden" id="auto-selection-hint" style="margin:0;">点击“设置终点”后，地图会放大；请在地图上点选终点，再确认终点并规划路径。</p>
 
                               <div class="auto-planner-actions" aria-label="自动工作区路径规划">
                                 <button class="btn-primary" type="button" id="auto-pick-destination-btn">设置终点</button>
@@ -1313,7 +1324,7 @@
                                 <strong id="auto-planner-status">等待设置地图终点。</strong>
                               </div>
 
-                              <div class="auto-runtime-grid">
+                              <div class="auto-runtime-grid auto-lite-hidden">
                                 <div class="auto-summary-card">
                                   <span class="label">任务阶段</span>
                                   <strong id="auto-runtime-phase">待命</strong>
@@ -1332,7 +1343,7 @@
                                 </div>
                               </div>
 
-                              <div class="auto-runtime-grid">
+                              <div class="auto-runtime-grid auto-lite-hidden">
                                 <div class="auto-summary-card">
                                   <span class="label">时序状态</span>
                                   <strong id="auto-sensor-timing-status">--</strong>
@@ -1351,17 +1362,68 @@
                                 </div>
                               </div>
 
-                              <p class="muted" id="auto-sensor-timing-note" style="margin:0;">
+                              <p class="muted auto-lite-hidden" id="auto-sensor-timing-note" style="margin:0;">
                                 自动工作区会按实测频率对 GPS、IMU、雷达的数据年龄和时差做门控。
                               </p>
+
+                              <div class="auto-runtime-grid auto-lite-hidden">
+                                <div class="auto-summary-card">
+                                  <span class="label">组合导航模式</span>
+                                  <strong id="auto-fusion-mode">等待初始化</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">组合导航状态</span>
+                                  <strong id="auto-fusion-status">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">融合位置</span>
+                                  <strong id="auto-fusion-position">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">融合航向</span>
+                                  <strong id="auto-fusion-heading">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">融合速度</span>
+                                  <strong id="auto-fusion-speed">--</strong>
+                                </div>
+                              </div>
+
+                              <div class="auto-runtime-grid auto-lite-hidden">
+                                <div class="auto-summary-card">
+                                  <span class="label">融合质量</span>
+                                  <strong id="auto-fusion-quality">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">yaw_offset</span>
+                                  <strong id="auto-fusion-yaw-offset">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">holdover</span>
+                                  <strong id="auto-fusion-holdover">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">GPS 拒绝原因</span>
+                                  <strong id="auto-fusion-reject-reason">--</strong>
+                                </div>
+                                <div class="auto-summary-card">
+                                  <span class="label">控制数据源</span>
+                                  <strong id="auto-fusion-source">--</strong>
+                                </div>
+                              </div>
+
+                              <div class="auto-path-note auto-lite-hidden">
+                                <span class="label">GPS 三层点诊断</span>
+                                <strong id="auto-gps-debug-panel" class="auto-debug-text">--</strong>
+                              </div>
 
                               <div class="avoidance-actions" aria-label="自动任务控制">
                                 <button class="btn-success" type="button" id="auto-task-start-btn">开始任务</button>
                                 <button class="btn-danger" type="button" id="auto-task-stop-btn">停止任务</button>
                               </div>
 
-                              <p class="muted" id="auto-task-status" style="margin:0;">当前未发送自动任务指令。</p>
-                              <p class="muted" style="margin:0;">自动任务会沿后端道路路径跟踪目标点，并在前向近障出现时切入避障链后继续推进。</p>
+                              <p class="muted auto-lite-hidden" id="auto-task-status" style="margin:0;">当前未发送自动任务指令。</p>
+                              <p class="muted auto-lite-hidden" style="margin:0;">自动任务会沿后端道路路径跟踪目标点，并在前向近障出现时切入避障链后继续推进。</p>
                             </div>
                           </div>
                         </div>
@@ -1587,6 +1649,7 @@
 	      tracePointSpacingM: 0.28,
 	      traceStaticIgnoreThresholdM: 0.55
 	    };
+	    const AUTO_GPS_DEBUG_MARKERS_ENABLED = true;
 
 	    const autoWorkspaceState = {
 	      config: null,
@@ -1597,6 +1660,9 @@
 	      mapProvider: null,
 	      mapExpanded: false,
 	      gpsMarker: null,
+	      gpsDebugRawMarker: null,
+	      gpsDebugFilteredMarker: null,
+	      gpsDebugCurrentMarker: null,
 	      originMarker: null,
 	      targetMarker: null,
 	      pendingTargetMarker: null,
@@ -1610,6 +1676,7 @@
 	      pendingDestination: null,
 	      planData: null,
 	      runtime: null,
+	      gpsDebug: null,
 	      actualTrackPoints: [],
 	      actualTrackSessionActive: false,
 	      currentMapPoint: null,
@@ -1741,6 +1808,7 @@
 	      workspaceState.latestSystem = null;
 	      workspaceState.latestDevices = null;
 	      autoWorkspaceState.runtime = null;
+	      autoWorkspaceState.gpsDebug = null;
 	      autoWorkspaceState.taskRequestPending = false;
 	      autoWorkspaceState.planRequestPending = false;
 	      renderSystemStatus(false);
@@ -1767,6 +1835,17 @@
 	      setText('auto-lidar-imu-skew', '--');
 	      setText('auto-sensor-ages', 'GPS -- / IMU -- / 雷达 --');
 	      setText('auto-sensor-timing-note', '自动工作区会按实测频率对 GPS、IMU、雷达的数据年龄和时差做门控。');
+	      setText('auto-fusion-mode', '等待初始化');
+	      setText('auto-fusion-status', '--');
+	      setText('auto-fusion-position', '--');
+	      setText('auto-fusion-heading', '--');
+	      setText('auto-fusion-speed', '--');
+	      setText('auto-fusion-quality', '--');
+	      setText('auto-fusion-yaw-offset', '--');
+	      setText('auto-fusion-holdover', '--');
+	      setText('auto-fusion-reject-reason', '--');
+	      setText('auto-fusion-source', '--');
+	      setText('auto-gps-debug-panel', '--');
 	      setText('chip-serial', '串口通信：未启动');
 	      setText('gps-state', defaultDeviceTexts.gps);
 	      setText('imu-state', defaultDeviceTexts.imu);
@@ -1929,6 +2008,7 @@
 	        tracking: '路径跟踪',
 	        avoiding: '避障接管',
 	        waiting_sensor: '等待传感器',
+	        fusion_invalid: '组合导航无效',
 	        arrived: '已到达',
 	        stopped: '已停止',
 	        plan_missing: '路径缺失'
@@ -2011,6 +2091,123 @@
 	        lidar_imu_skew: '雷达/IMU 未对齐'
 	      };
 	      return labels[normalized] || '';
+	    }
+
+	    function autoFusionModeText(mode) {
+	      const normalized = typeof mode === 'string' ? mode.trim() : '';
+	      const labels = {
+	        kUninitialized: '等待初始化',
+	        kAligning: '航向对齐中',
+	        kFused: '组合导航正常',
+	        kGpsHold: 'GPS短时保持',
+	        kDegraded: '组合导航降级',
+	        kInvalid: '组合导航无效'
+	      };
+	      return labels[normalized] || normalized || '--';
+	    }
+
+	    function autoFusionStatusText(runtime) {
+	      if (!runtime) {
+	        return '--';
+	      }
+	      return runtime.fusion_valid ? 'OK' : 'INVALID';
+	    }
+
+	    function autoFusionSpeedText(speedMps) {
+	      const speed = finiteNumber(speedMps);
+	      return speed === null ? '--' : `${speed.toFixed(2)} m/s`;
+	    }
+
+	    function autoFusionQualityText(quality) {
+	      const value = finiteNumber(quality);
+	      return value === null ? '--' : value.toFixed(2);
+	    }
+
+	    function autoFusionYawOffsetText(offsetDeg) {
+	      const offset = finiteNumber(offsetDeg);
+	      return offset === null ? '--' : `${offset.toFixed(2)}°`;
+	    }
+
+	    function autoFusionHoldoverText(holdoverMs) {
+	      const holdover = finiteNumber(holdoverMs);
+	      return holdover === null || holdover < 0 ? '--' : `${holdover.toFixed(0)} ms`;
+	    }
+
+	    function autoFusionRejectReasonText(runtime) {
+	      if (!runtime) {
+	        return '--';
+	      }
+	      const reason =
+	        typeof runtime.fusion_last_reject_reason === 'string'
+	          ? runtime.fusion_last_reject_reason.trim()
+	          : '';
+	      const rejectedCount = finiteNumber(runtime.fusion_gps_rejected_count);
+	      if (!reason) {
+	        return rejectedCount === null || rejectedCount <= 0
+	          ? '--'
+	          : `累计 ${Math.round(rejectedCount)} 次`;
+	      }
+	      return rejectedCount === null || rejectedCount <= 0
+	        ? reason
+	        : `${reason} (${Math.round(rejectedCount)})`;
+	    }
+
+	    function autoFusionSourceText(source) {
+	      const normalized = typeof source === 'string' ? source.trim().toLowerCase() : '';
+	      if (normalized === 'gnss_imu_ekf') {
+	        return 'gnss_imu_ekf';
+	      }
+	      if (normalized === 'legacy_gps_imu') {
+	        return 'legacy_gps_imu';
+	      }
+	      return '--';
+	    }
+
+	    function autoGpsDebugLatLonText(valid, latitude, longitude) {
+	      const lat = finiteNumber(latitude);
+	      const lon = finiteNumber(longitude);
+	      if (!valid || lat === null || lon === null) {
+	        return '--';
+	      }
+	      return `lat=${lat.toFixed(7)}\nlon=${lon.toFixed(7)}`;
+	    }
+
+	    function autoGpsDebugPanelText(debug) {
+	      if (!debug) {
+	        return '--';
+	      }
+	      const raw = autoGpsDebugLatLonText(
+	        Boolean(debug.raw_valid),
+	        debug.raw_latitude,
+	        debug.raw_longitude);
+	      const filtered = autoGpsDebugLatLonText(
+	        Boolean(debug.filtered_valid),
+	        debug.filtered_latitude,
+	        debug.filtered_longitude);
+	      const current = autoGpsDebugLatLonText(
+	        Boolean(debug.current_valid),
+	        debug.current_latitude,
+	        debug.current_longitude);
+	      const origin = autoGpsDebugLatLonText(
+	        Boolean(debug.origin_valid),
+	        debug.origin_latitude,
+	        debug.origin_longitude);
+	      const gpsLocalX = finiteNumber(debug.gps_local_x);
+	      const gpsLocalY = finiteNumber(debug.gps_local_y);
+	      const fusedX = finiteNumber(debug.fused_x);
+	      const fusedY = finiteNumber(debug.fused_y);
+	      const fusionState =
+	        typeof debug.fusion_state === 'string' && debug.fusion_state.trim()
+	          ? debug.fusion_state.trim()
+	          : '--';
+	      const localFrameValid = Boolean(debug.local_frame_valid) ? 'true' : 'false';
+	      return [
+	        `RAW:\n${raw}`,
+	        `FILTERED:\n${filtered}`,
+	        `CURRENT:\n${current}`,
+	        `ORIGIN:\n${origin}`,
+	        `LOCAL/FUSED:\ngps_local_x=${Boolean(debug.gps_local_valid) && gpsLocalX !== null ? gpsLocalX.toFixed(2) : '--'}\ngps_local_y=${Boolean(debug.gps_local_valid) && gpsLocalY !== null ? gpsLocalY.toFixed(2) : '--'}\nfused_x=${fusedX !== null ? fusedX.toFixed(2) : '--'}\nfused_y=${fusedY !== null ? fusedY.toFixed(2) : '--'}\nfusion_state=${fusionState}\nlocal_frame_valid=${localFrameValid}`
+	      ].join('\n\n');
 	    }
 
 	    function autoTimingNoteText(runtime) {
@@ -2350,6 +2547,33 @@
 	      setText('auto-lidar-imu-skew', autoTimingMsText(runtime && runtime.lidar_imu_skew_ms));
 	      setText('auto-sensor-ages', autoSensorAgesText(runtime));
 	      setText('auto-sensor-timing-note', autoTimingNoteText(runtime));
+	      setText('auto-fusion-mode', autoFusionModeText(runtime && runtime.fusion_mode));
+	      setText('auto-fusion-status', autoFusionStatusText(runtime));
+	      setText(
+	        'auto-fusion-position',
+	        autoXYText(runtime && runtime.fusion_x_m, runtime && runtime.fusion_y_m));
+	      setText(
+	        'auto-fusion-heading',
+	        runtime && Number.isFinite(Number(runtime.fusion_heading_deg))
+	          ? `${Number(runtime.fusion_heading_deg).toFixed(1)}°`
+	          : '--');
+	      setText('auto-fusion-speed', autoFusionSpeedText(runtime && runtime.fusion_speed_mps));
+	      setText('auto-fusion-quality', autoFusionQualityText(runtime && runtime.fusion_quality));
+	      setText(
+	        'auto-fusion-yaw-offset',
+	        autoFusionYawOffsetText(runtime && runtime.fusion_yaw_offset_deg));
+	      setText(
+	        'auto-fusion-holdover',
+	        autoFusionHoldoverText(runtime && runtime.fusion_holdover_ms));
+	      setText(
+	        'auto-fusion-reject-reason',
+	        autoFusionRejectReasonText(runtime));
+	      setText(
+	        'auto-fusion-source',
+	        autoFusionSourceText(runtime && runtime.control_position_source));
+	      setText(
+	        'auto-gps-debug-panel',
+	        autoGpsDebugPanelText(autoWorkspaceState.gpsDebug));
 
 	      if (runtime && runtime.task_running) {
 	        setAutoPlanState('任务运行中');
@@ -2564,6 +2788,9 @@
 	      autoWorkspaceState.mapReady = false;
 	      autoWorkspaceState.mapProvider = null;
 	      autoWorkspaceState.gpsMarker = null;
+	      autoWorkspaceState.gpsDebugRawMarker = null;
+	      autoWorkspaceState.gpsDebugFilteredMarker = null;
+	      autoWorkspaceState.gpsDebugCurrentMarker = null;
 	      autoWorkspaceState.originMarker = null;
 	      autoWorkspaceState.targetMarker = null;
 	      autoWorkspaceState.pendingTargetMarker = null;
@@ -2593,6 +2820,60 @@
 	        return new TMap.Lnglat(lng, lat);
 	      }
 	      return null;
+	    }
+
+	    function createAutoGpsDebugMarker(kind, point) {
+	      if (!point || currentAutoMapProvider() !== 'osm') {
+	        return null;
+	      }
+	      const L = getLeafletNamespace();
+	      if (!L) {
+	        return null;
+	      }
+	      const markerStyles = {
+	        raw: {
+	          label: 'RAW GPS',
+	          radius: 5,
+	          color: '#dc2626',
+	          weight: 2,
+	          fillColor: '#fecaca',
+	          fillOpacity: 0.92
+	        },
+	        filtered: {
+	          label: 'FILTERED GPS',
+	          radius: 6,
+	          color: '#ca8a04',
+	          weight: 2,
+	          fillColor: '#fde68a',
+	          fillOpacity: 0.88
+	        },
+	        current: {
+	          label: 'CURRENT EKF',
+	          radius: 8,
+	          color: '#1d4ed8',
+	          weight: 2,
+	          fillColor: '#dbeafe',
+	          fillOpacity: 0.18
+	        }
+	      };
+	      const style = markerStyles[kind];
+	      if (!style) {
+	        return null;
+	      }
+	      const marker = L.circleMarker(point, {
+	        radius: style.radius,
+	        color: style.color,
+	        weight: style.weight,
+	        fillColor: style.fillColor,
+	        fillOpacity: style.fillOpacity
+	      });
+	      if (typeof marker.bindTooltip === 'function') {
+	        marker.bindTooltip(style.label, {
+	          direction: 'top',
+	          opacity: 0.95
+	        });
+	      }
+	      return marker;
 	    }
 
 	    function addMapOverlay(overlay) {
@@ -2630,6 +2911,51 @@
 	      }
 	      if (typeof autoWorkspaceState.map.removeOverlay === 'function') {
 	        autoWorkspaceState.map.removeOverlay(overlay);
+	      }
+	    }
+
+	    function clearAutoGpsDebugMarkers() {
+	      removeMapOverlay(autoWorkspaceState.gpsDebugRawMarker);
+	      removeMapOverlay(autoWorkspaceState.gpsDebugFilteredMarker);
+	      removeMapOverlay(autoWorkspaceState.gpsDebugCurrentMarker);
+	      autoWorkspaceState.gpsDebugRawMarker = null;
+	      autoWorkspaceState.gpsDebugFilteredMarker = null;
+	      autoWorkspaceState.gpsDebugCurrentMarker = null;
+	    }
+
+	    function syncAutoGpsDebugMarkers(debug) {
+	      clearAutoGpsDebugMarkers();
+	      if (!AUTO_GPS_DEBUG_MARKERS_ENABLED ||
+	          !autoWorkspaceState.mapReady ||
+	          autoWorkspaceState.mapProvider !== 'osm' ||
+	          !debug) {
+	        return;
+	      }
+
+	      const rawLatitude = finiteNumber(debug.raw_latitude);
+	      const rawLongitude = finiteNumber(debug.raw_longitude);
+	      if (debug.raw_valid && rawLatitude !== null && rawLongitude !== null) {
+	        const rawPoint = createMapPoint(rawLongitude, rawLatitude);
+	        autoWorkspaceState.gpsDebugRawMarker = createAutoGpsDebugMarker('raw', rawPoint);
+	        addMapOverlay(autoWorkspaceState.gpsDebugRawMarker);
+	      }
+
+	      const filteredLatitude = finiteNumber(debug.filtered_latitude);
+	      const filteredLongitude = finiteNumber(debug.filtered_longitude);
+	      if (debug.filtered_valid && filteredLatitude !== null && filteredLongitude !== null) {
+	        const filteredPoint = createMapPoint(filteredLongitude, filteredLatitude);
+	        autoWorkspaceState.gpsDebugFilteredMarker =
+	          createAutoGpsDebugMarker('filtered', filteredPoint);
+	        addMapOverlay(autoWorkspaceState.gpsDebugFilteredMarker);
+	      }
+
+	      const currentLatitude = finiteNumber(debug.current_latitude);
+	      const currentLongitude = finiteNumber(debug.current_longitude);
+	      if (debug.current_valid && currentLatitude !== null && currentLongitude !== null) {
+	        const currentPoint = createMapPoint(currentLongitude, currentLatitude);
+	        autoWorkspaceState.gpsDebugCurrentMarker =
+	          createAutoGpsDebugMarker('current', currentPoint);
+	        addMapOverlay(autoWorkspaceState.gpsDebugCurrentMarker);
 	      }
 	    }
 
@@ -3046,13 +3372,17 @@
 	      const provider = currentAutoMapProvider();
 	      const L = provider === 'osm' ? getLeafletNamespace() : null;
 	      const TMap = provider === 'tianditu' ? getTiandituNamespace() : null;
-	      if (!autoWorkspaceState.mapReady || !autoWorkspaceState.latestGps || !autoWorkspaceState.latestGps.valid) {
+	      if (!autoWorkspaceState.mapReady) {
 	        return;
 	      }
 	      if (provider === 'osm' && !L) {
 	        return;
 	      }
 	      if (provider === 'tianditu' && !TMap) {
+	        return;
+	      }
+	      if (!autoWorkspaceState.latestGps || !autoWorkspaceState.latestGps.valid) {
+	        syncAutoGpsDebugMarkers(autoWorkspaceState.gpsDebug);
 	        return;
 	      }
 	      const config = autoWorkspaceState.config || {};
@@ -3095,6 +3425,7 @@
 	              fillOpacity: 0.08
 	            });
 	      addMapOverlay(autoWorkspaceState.rangeCircle);
+	      syncAutoGpsDebugMarkers(autoWorkspaceState.gpsDebug);
 	      syncAutoOriginOverlay(autoWorkspaceState.runtime);
 
 	      const now = Date.now();
@@ -3225,6 +3556,11 @@
 	        gps && gps.valid &&
 	        Number.isFinite(Number(gps.latitude)) &&
 	        Number.isFinite(Number(gps.longitude));
+	      const runtimeControlSource =
+	        autoRuntime && typeof autoRuntime.control_position_source === 'string'
+	          ? autoRuntime.control_position_source.trim().toLowerCase()
+	          : '';
+	      const runtimeFusionValid = Boolean(autoRuntime && autoRuntime.fusion_valid);
 	      const runtimeLatitude = finiteNumber(autoRuntime && autoRuntime.current_latitude);
 	      const runtimeLongitude = finiteNumber(autoRuntime && autoRuntime.current_longitude);
 	      const runtimeRawLatitude = finiteNumber(autoRuntime && autoRuntime.raw_latitude);
@@ -3239,9 +3575,10 @@
 	      const fallbackGpsStddev = finiteNumber(gps && gps.horizontal_stddev_m);
 	      const runtimeGpsValid =
 	        autoRuntime &&
-	        autoRuntime.gps_valid &&
 	        runtimeLatitude !== null &&
-	        runtimeLongitude !== null;
+	        runtimeLongitude !== null &&
+	        ((runtimeControlSource === 'gnss_imu_ekf' && runtimeFusionValid) ||
+	          (runtimeControlSource !== 'gnss_imu_ekf' && autoRuntime.gps_valid));
 	      autoWorkspaceState.latestGps = runtimeGpsValid ? {
 	        valid: true,
 	        latitude: runtimeLatitude,
@@ -3270,8 +3607,9 @@
 	      const runtimeYaw = finiteNumber(autoRuntime && autoRuntime.current_yaw_deg);
 	      const runtimeHeadingValid =
 	        autoRuntime &&
-	        autoRuntime.heading_valid &&
-	        runtimeYaw !== null;
+	        runtimeYaw !== null &&
+	        ((runtimeControlSource === 'gnss_imu_ekf' && runtimeFusionValid) ||
+	          (runtimeControlSource !== 'gnss_imu_ekf' && autoRuntime.heading_valid));
 	      autoWorkspaceState.latestImu = runtimeHeadingValid ? {
 	        valid: true,
 	        roll_deg: finiteNumber(imu && imu.roll_deg),
@@ -3446,9 +3784,11 @@
 	      const system = state && state.system ? state.system : {};
 	      const devices = state && state.devices ? state.devices : {};
 	      const autoWorkspace = state && state.key_display ? state.key_display.auto_workspace : null;
+	      const autoGpsDebug = state && state.auto_gps_debug ? state.auto_gps_debug : null;
 	      workspaceState.latestSystem = system;
 	      workspaceState.latestDevices = devices;
 	      autoWorkspaceState.runtime = autoWorkspace || null;
+	      autoWorkspaceState.gpsDebug = autoGpsDebug;
 	      if (autoWorkspace && autoWorkspace.plan_ready) {
 	        autoWorkspaceState.destination = {
 	          latitude: finiteNumber(autoWorkspace.destination_latitude),

@@ -41,6 +41,7 @@ set(PROJECT_CORE_SOURCES
     function/src/control/Judgment.cpp
     function/src/control/auto_avoid.cpp
     function/src/control/auto_avoid_input_builder.cpp
+    function/src/navigation/gnss_imu_ekf.cpp
     function/src/control/to_stm.cpp
     function/src/web/log_dashboard_server.cpp
 )

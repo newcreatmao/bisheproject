@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -13,6 +14,7 @@
 #include "control/auto_avoid_control_snapshot_pool.hpp"
 #include "control/auto_avoid.hpp"
 #include "control/auto_avoid_input_builder.hpp"
+#include "navigation/gnss_imu_ekf.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/image.hpp"
@@ -58,6 +60,7 @@ private:
         double longitude = 0.0;
         double altitude = 0.0;
         double horizontal_stddev_m = 0.0;
+        bool horizontal_covariance_available = false;
         bool origin_stable = false;
         double origin_stability_radius_m = 0.0;
         std::size_t origin_stability_samples = 0;
@@ -253,6 +256,7 @@ private:
         double current_x_m = 0.0;
         double current_y_m = 0.0;
         double current_yaw_deg = 0.0;
+        double current_speed_mps = 0.0;
         double destination_x_m = 0.0;
         double destination_y_m = 0.0;
         double remaining_distance_m = 0.0;
@@ -263,6 +267,22 @@ private:
         int command_steering_encoder = 0;
         std::string heading_source;
         std::string route_provider;
+        bool fusion_valid = false;
+        std::string fusion_mode = "kUninitialized";
+        double fusion_quality = 0.0;
+        double fusion_x_m = 0.0;
+        double fusion_y_m = 0.0;
+        double fusion_heading_deg = 0.0;
+        double fusion_speed_mps = 0.0;
+        double fusion_yaw_offset_deg = 0.0;
+        bool fusion_yaw_aligned = false;
+        double fusion_holdover_ms = -1.0;
+        double fusion_gps_age_ms = -1.0;
+        double fusion_imu_age_ms = -1.0;
+        bool fusion_gps_used = false;
+        int fusion_gps_rejected_count = 0;
+        std::string fusion_last_reject_reason;
+        std::string control_position_source = "legacy_gps_imu";
         std::string phase = "idle";
         std::string message = "自动任务待命";
         std::vector<TrackPoint> actual_track_path;
@@ -328,6 +348,15 @@ private:
         double longitude,
         double altitude,
         double horizontal_stddev_m);
+    void resetAutoWorkspaceGnssImuEkfLocked();
+    void maybeInitializeAutoWorkspaceGnssImuEkfLocked(double stamp_s);
+    navigation::GnssImuEkfState autoWorkspaceGnssImuEkfStateLocked(double now_s) const;
+    void applyAutoWorkspaceFusionRuntimeLocked(
+        AutoWorkspaceRuntimeState& runtime_state,
+        const navigation::GnssImuEkfState& fusion_state) const;
+    void logAutoWorkspaceFusionStateTransitionLocked(
+        const navigation::GnssImuEkfState& before,
+        const navigation::GnssImuEkfState& after);
     void resetAutoWorkspaceGpsFilterLocked();
     void updateAutoWorkspaceFilteredGpsLocked(
         const std::chrono::steady_clock::time_point& now);
@@ -388,6 +417,7 @@ private:
     AutoAvoidController auto_workspace_avoid_controller_;
     AutoAvoidInputBuilder auto_workspace_avoid_input_builder_;
     AutoAvoidControlSnapshotPool auto_workspace_avoid_control_snapshot_pool_;
+    navigation::GnssImuEkf auto_gnss_imu_ekf_;
     DepthRuntimeState depth_state_;
     LidarRuntimeState lidar_state_;
     LidarDisplayFilterState lidar_display_filter_state_;
@@ -400,6 +430,12 @@ private:
     GpsRuntimeState auto_workspace_gps_state_;
     AutoWorkspaceGpsFusionState auto_workspace_gps_filter_state_;
     AutoWorkspaceLocalFrameState auto_workspace_local_frame_state_;
+    bool auto_workspace_use_gnss_imu_ekf_ = true;
+    bool auto_workspace_use_gps_course_alignment_ = false;
+    bool auto_workspace_enable_front_avoidance_handover_ = false;
+    std::chrono::steady_clock::time_point auto_workspace_last_fusion_reject_log_{};
+    std::chrono::steady_clock::time_point auto_workspace_last_fusion_yaw_log_{};
+    std::chrono::steady_clock::time_point auto_workspace_last_origin_debug_log_{};
     std::string latest_rgb_yolo_payload_;
     std::chrono::steady_clock::time_point latest_rgb_yolo_received_steady_{};
     std::string active_workspace_mode_ = "STOP";

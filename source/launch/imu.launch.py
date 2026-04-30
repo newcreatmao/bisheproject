@@ -68,7 +68,7 @@ def generate_launch_description():
         DeclareLaunchArgument('imu_port', default_value='/dev/imu'),
         DeclareLaunchArgument('imu_baud', default_value='460800'),
         DeclareLaunchArgument('imu_rate_hz', default_value='50'),
-        DeclareLaunchArgument('imu_heading_mode', default_value='vru'),
+        DeclareLaunchArgument('imu_heading_mode', default_value='ahrs'),
         DeclareLaunchArgument('imu_output_profile', default_value='project'),
         DeclareLaunchArgument('imu_mount_preserve_yaw', default_value='true'),
         imu_setup_process,

@@ -58,9 +58,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rate-hz", type=int, default=50, choices=sorted(RATE_TO_CODE.keys()))
     parser.add_argument(
         "--heading-mode",
-        default="vru",
+        default="ahrs",
         choices=sorted(MODE_TO_CODE.keys()),
-        help="H30 algorithm mode: vru is the safest default around magnetic interference",
+        help="H30 algorithm mode: ahrs provides absolute heading for AUTO path tracking",
     )
     parser.add_argument(
         "--output-profile",

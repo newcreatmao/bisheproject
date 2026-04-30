@@ -56,35 +56,24 @@ constexpr std::size_t kGpsOriginStabilityWindowSize = 15;
 constexpr double kGpsFilterEmaAlpha = 0.28;
 constexpr double kGpsOriginStableRadiusM = 0.90;
 constexpr double kGpsOriginStableHorizontalStdDevM = 4.0;
-// Field measurements on 2026-04-25:
-// - /fix ~= 6.0 Hz
+// Field measurements on 2026-04-27:
+// - /fix ~= 4.0 Hz
 // - /scan ~= 9.86 Hz
 // - /imu/data_corrected ~= 49.5 Hz
-constexpr std::chrono::milliseconds kAutoWorkspaceGpsFreshLimit(450);
+constexpr std::chrono::milliseconds kAutoWorkspaceGpsFreshLimit(800);
 constexpr std::chrono::milliseconds kAutoWorkspaceImuFreshLimit(150);
 constexpr std::chrono::milliseconds kAutoWorkspaceLidarFreshLimit(250);
-constexpr std::chrono::milliseconds kAutoWorkspaceGpsImuSkewLimit(320);
+constexpr std::chrono::milliseconds kAutoWorkspaceGpsImuSkewLimit(450);
 constexpr std::chrono::milliseconds kAutoWorkspaceLidarImuSkewLimit(160);
-constexpr double kAutoWorkspaceGpsCourseMinSpeedMps = 0.22;
-constexpr double kAutoWorkspaceGpsVelocityDecayPerSecond = 0.55;
-constexpr double kAutoWorkspaceGpsResidualBaseClampM = 1.2;
-constexpr double kAutoWorkspaceGpsResidualSigmaScale = 2.4;
-constexpr double kAutoWorkspaceGpsResidualSpeedScale = 0.9;
-constexpr double kAutoWorkspaceGpsMaxSpeedMps = 3.0;
-constexpr double kAutoWorkspaceGpsStaticSpeedThresholdMps = 0.10;
-constexpr std::size_t kAutoWorkspaceGpsStaticEntrySamples = 4;
-constexpr double kAutoWorkspaceGpsStaticAnchorAlpha = 0.06;
-constexpr double kAutoWorkspaceGpsStaticVelocityDecayPerSecond = 4.2;
-constexpr double kAutoWorkspaceGpsStaticResidualBaseClampM = 0.18;
-constexpr double kAutoWorkspaceGpsStaticResidualSigmaScale = 0.16;
-constexpr double kAutoWorkspaceHeadingOffsetEmaAlpha = 0.25;
 constexpr double kAutoWorkspaceGpsOffsetXM = -0.68;
 constexpr double kAutoWorkspaceGpsOffsetYM = 0.28;
 constexpr int kStm32StartSpeedRaw = 30;
 constexpr double kStm32ToWebSpeedScale = 0.89;
 constexpr int kStm32StartAngleCommand = 0;
-constexpr int kAutoWorkspaceCruiseSpeedCmS = 45;
+constexpr int kAutoWorkspaceCruiseSpeedCmS = 50;
 constexpr int kAutoWorkspaceApproachSpeedCmS = 18;
+constexpr int kAutoWorkspaceGpsHoldSpeedLimitCmS = 30;
+constexpr int kAutoWorkspaceDegradedSpeedLimitCmS = 18;
 constexpr double kAutoWorkspaceApproachDistanceM = 4.0;
 constexpr double kAutoWorkspaceArriveDistanceM = 1.8;
 constexpr double kAutoWorkspacePathLookaheadM = 2.5;
@@ -184,6 +173,35 @@ int envIntOrDefault(const char* key, int fallback) {
             return std::stoi(value);
         } catch (...) {
             return fallback;
+        }
+    }
+    return fallback;
+}
+
+bool envBoolOrDefault(const char* key, bool fallback) {
+    if (const char* value = std::getenv(key)) {
+        std::string normalized = value;
+        const auto begin = normalized.find_first_not_of(" \t\r\n");
+        if (begin == std::string::npos) {
+            return fallback;
+        }
+        const auto end = normalized.find_last_not_of(" \t\r\n");
+        normalized = normalized.substr(begin, end - begin + 1);
+        if (normalized.empty()) {
+            return fallback;
+        }
+
+        std::string lowered;
+        lowered.reserve(normalized.size());
+        for (const char ch : normalized) {
+            lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+        }
+
+        if (lowered == "1" || lowered == "true" || lowered == "on" || lowered == "yes") {
+            return true;
+        }
+        if (lowered == "0" || lowered == "false" || lowered == "off" || lowered == "no") {
+            return false;
         }
     }
     return fallback;
@@ -539,80 +557,9 @@ double normalizeHeadingDifferenceDeg(double value_deg) {
     return value_deg;
 }
 
-double clampUnit(double value) {
-    return std::clamp(value, 0.0, 1.0);
-}
-
-double autoWorkspaceGpsPositionGain(double horizontal_stddev_m, double speed_m_s) {
-    const double sigma =
-        (std::isfinite(horizontal_stddev_m) && horizontal_stddev_m > 0.0) ?
-            horizontal_stddev_m :
-            3.0;
-    const double accuracy_factor = clampUnit((4.5 - sigma) / 4.0);
-    const double speed_factor = clampUnit(speed_m_s / 0.8);
-    return std::clamp(0.18 + accuracy_factor * 0.34 + speed_factor * 0.10, 0.18, 0.62);
-}
-
-double autoWorkspaceGpsVelocityGain(double speed_m_s, double horizontal_stddev_m) {
-    const double sigma =
-        (std::isfinite(horizontal_stddev_m) && horizontal_stddev_m > 0.0) ?
-            horizontal_stddev_m :
-            3.0;
-    const double accuracy_factor = clampUnit((5.0 - sigma) / 4.5);
-    const double speed_factor = clampUnit(speed_m_s / 1.0);
-    return std::clamp(0.24 + accuracy_factor * 0.22 + speed_factor * 0.28, 0.24, 0.74);
-}
-
-double autoWorkspaceGpsHeadingGain(double speed_m_s) {
-    return std::clamp(0.16 + clampUnit(speed_m_s / 1.0) * 0.34, 0.16, 0.50);
-}
-
-double autoWorkspaceGpsMaxResidualM(double horizontal_stddev_m, double speed_m_s) {
-    const double sigma =
-        (std::isfinite(horizontal_stddev_m) && horizontal_stddev_m > 0.0) ?
-            horizontal_stddev_m :
-            3.0;
-    return std::max(
-        kAutoWorkspaceGpsResidualBaseClampM,
-        sigma * kAutoWorkspaceGpsResidualSigmaScale + speed_m_s * kAutoWorkspaceGpsResidualSpeedScale);
-}
-
-double autoWorkspaceGpsStaticPositionGain(double horizontal_stddev_m) {
-    const double sigma =
-        (std::isfinite(horizontal_stddev_m) && horizontal_stddev_m > 0.0) ?
-            horizontal_stddev_m :
-            3.0;
-    const double accuracy_factor = clampUnit((4.5 - sigma) / 4.0);
-    return std::clamp(0.04 + accuracy_factor * 0.06, 0.04, 0.10);
-}
-
-double autoWorkspaceGpsStaticMaxResidualM(double horizontal_stddev_m) {
-    const double sigma =
-        (std::isfinite(horizontal_stddev_m) && horizontal_stddev_m > 0.0) ?
-            horizontal_stddev_m :
-            3.0;
-    return std::clamp(
-        kAutoWorkspaceGpsStaticResidualBaseClampM +
-            sigma * kAutoWorkspaceGpsStaticResidualSigmaScale,
-        kAutoWorkspaceGpsStaticResidualBaseClampM,
-        0.55);
-}
-
-double autoWorkspaceHeadingDegFromImuYawAndOffset(
-    double imu_yaw_deg,
-    double heading_offset_deg) {
-    // Corrected IMU yaw comes from the ROS quaternion-to-Euler convention:
-    // positive yaw means counter-clockwise rotation. Route/GPS bearings in AUTO
-    // use a compass convention: 0=north and positive means clockwise (to the
-    // vehicle's right). The stored offset therefore represents the compass
-    // heading when IMU yaw reads zero, so runtime heading is offset - yaw.
-    return normalizeHeadingDifferenceDeg(heading_offset_deg - imu_yaw_deg);
-}
-
-double autoWorkspaceHeadingOffsetDegFromBearingAndImuYaw(
-    double bearing_deg,
-    double imu_yaw_deg) {
-    return normalizeHeadingDifferenceDeg(bearing_deg + imu_yaw_deg);
+double steadySeconds(const std::chrono::steady_clock::time_point& value) {
+    return std::chrono::duration_cast<std::chrono::duration<double>>(
+        value.time_since_epoch()).count();
 }
 
 double autoWorkspaceHeadingDegFromImuYawDirect(double imu_yaw_deg) {
@@ -1479,6 +1426,31 @@ std::optional<fs::path> latestSavedPhotoPath(const fs::path& photos_dir) {
 LogDashboardServer::LogDashboardServer(std::string web_root)
     : web_root_(resolveWebRoot(web_root)),
       storage_root_(resolveStorageRoot()) {
+    auto_workspace_use_gnss_imu_ekf_ =
+        envBoolOrDefault("AUTO_WORKSPACE_USE_GNSS_IMU_EKF", true);
+    auto_workspace_use_gps_course_alignment_ =
+        envBoolOrDefault("AUTO_WORKSPACE_USE_GPS_COURSE_ALIGNMENT", false);
+    auto_workspace_enable_front_avoidance_handover_ =
+        envBoolOrDefault("AUTO_WORKSPACE_ENABLE_FRONT_AVOIDANCE_HANDOVER", false);
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        resetAutoWorkspaceGnssImuEkfLocked();
+    }
+    log_info(
+        kLogModule,
+        auto_workspace_use_gnss_imu_ekf_ ?
+            "AUTO workspace GNSS/IMU EKF enabled" :
+            "AUTO workspace GNSS/IMU EKF disabled, using legacy GPS+IMU input");
+    log_info(
+        kLogModule,
+        auto_workspace_use_gps_course_alignment_ ?
+            "AUTO workspace GPS course yaw alignment enabled" :
+            "AUTO workspace GPS course yaw alignment disabled, using IMU yaw as the heading reference");
+    log_info(
+        kLogModule,
+        auto_workspace_enable_front_avoidance_handover_ ?
+            "AUTO workspace front-obstacle avoidance handover enabled" :
+            "AUTO workspace front-obstacle avoidance handover disabled, using pure navigation tracking");
     try {
         fs::create_directories(fs::path(storage_root_) / "photos");
     } catch (const std::exception& ex) {
@@ -1508,6 +1480,10 @@ void LogDashboardServer::stop() {
     server_.stop();
     stopAutoWorkspaceControl();
     stopAutoAvoidControl();
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        resetAutoWorkspaceGnssImuEkfLocked();
+    }
     stopRuntimeLogBridge();
     stopRosBridge();
     stopStm32Bridge();
@@ -2136,6 +2112,7 @@ void LogDashboardServer::configureRoutes() {
             auto_workspace_plan_state_ = AutoWorkspacePlanState{};
             auto_workspace_local_frame_state_ = AutoWorkspaceLocalFrameState{};
             resetAutoWorkspaceGpsFilterLocked();
+            resetAutoWorkspaceGnssImuEkfLocked();
 
             auto_workspace_runtime_state_.plan_ready = false;
             auto_workspace_runtime_state_.awaiting_start_ack = false;
@@ -2482,6 +2459,7 @@ void LogDashboardServer::configureRoutes() {
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             active_workspace_mode_ = "STOP";
+            resetAutoWorkspaceGnssImuEkfLocked();
             manual_workspace_working_ = false;
             auto_workspace_runtime_state_.awaiting_start_ack = false;
             auto_workspace_runtime_state_.task_running = false;
@@ -2583,6 +2561,7 @@ void LogDashboardServer::configureRoutes() {
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             active_workspace_mode_ = "STOP";
+            resetAutoWorkspaceGnssImuEkfLocked();
             manual_workspace_working_ = false;
             auto_workspace_runtime_state_.awaiting_start_ack = false;
             auto_workspace_runtime_state_.task_running = false;
@@ -2722,6 +2701,10 @@ void LogDashboardServer::configureRoutes() {
                 vehicle_command_state_.speed = 0;
             }
             if (current_mode == "AUTO" && target_mode != "AUTO") {
+                auto_gnss_imu_ekf_.setMotionHint(navigation::MotionHint{});
+                if (target_mode == "STOP") {
+                    resetAutoWorkspaceGnssImuEkfLocked();
+                }
                 auto_workspace_runtime_state_.awaiting_start_ack = false;
                 auto_workspace_runtime_state_.task_running = false;
                 auto_workspace_runtime_state_.avoidance_active = false;
@@ -3569,6 +3552,7 @@ void LogDashboardServer::stopAutoWorkspaceControl(bool send_stop) {
     auto_workspace_avoid_control_snapshot_pool_.clear();
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
+        auto_gnss_imu_ekf_.setMotionHint(navigation::MotionHint{});
         auto_workspace_runtime_state_.awaiting_start_ack = false;
         auto_workspace_runtime_state_.task_running = false;
         auto_workspace_runtime_state_.avoidance_active = false;
@@ -3788,12 +3772,20 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
         next_tick += kAutoWorkspaceControlPeriod;
         ++control_cycle_id;
 
+        const auto now = std::chrono::steady_clock::now();
+        const double now_s = steadySeconds(now);
+        const bool controller_avoidance_active =
+            auto_workspace_avoid_controller_.currentAvoidanceStage() !=
+            AutoAvoidController::AvoidanceStage::Idle;
         std::string active_mode;
         LidarRuntimeState auto_workspace_lidar_state;
         GpsRuntimeState auto_workspace_gps_state;
         ImuRuntimeState auto_workspace_imu_state;
         AutoWorkspaceLocalFrameState local_frame_state;
         AutoWorkspacePlanState plan_state;
+        AutoWorkspaceRuntimeState runtime_update;
+        navigation::GnssImuEkfState fusion_state;
+        bool use_gnss_imu_ekf = false;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             active_mode = active_workspace_mode_;
@@ -3802,13 +3794,27 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
             auto_workspace_imu_state = auto_workspace_imu_state_;
             local_frame_state = auto_workspace_local_frame_state_;
             plan_state = auto_workspace_plan_state_;
+            runtime_update = auto_workspace_runtime_state_;
+            use_gnss_imu_ekf = auto_workspace_use_gnss_imu_ekf_;
+
+            navigation::MotionHint hint;
+            hint.command_speed_mps =
+                static_cast<double>(runtime_update.command_speed_cm_s) / 100.0;
+            hint.steering_encoder = runtime_update.command_steering_encoder;
+            hint.auto_task_running =
+                runtime_update.task_running || runtime_update.awaiting_start_ack;
+            hint.avoidance_active =
+                runtime_update.avoidance_active || controller_avoidance_active;
+            hint.emergency_active = stm32_emergency_active_.load();
+            auto_gnss_imu_ekf_.setMotionHint(hint);
+            fusion_state = autoWorkspaceGnssImuEkfStateLocked(now_s);
+            applyAutoWorkspaceFusionRuntimeLocked(runtime_update, fusion_state);
         }
 
         if (active_mode != "AUTO") {
             break;
         }
 
-        const auto now = std::chrono::steady_clock::now();
         const auto timing = assessAutoWorkspaceTiming(
             auto_workspace_gps_state,
             auto_workspace_imu_state,
@@ -3834,44 +3840,76 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
             std::isfinite(auto_workspace_gps_state.heading_deg) &&
             timing.gps_imu_aligned;
         const bool local_frame_valid = local_frame_state.valid;
-        const double current_latitude =
-            gps_valid ? auto_workspace_gps_state.latitude : 0.0;
-        const double current_longitude =
-            gps_valid ? auto_workspace_gps_state.longitude : 0.0;
-        const double current_yaw_deg =
-            heading_valid ? auto_workspace_gps_state.heading_deg : 0.0;
-
+        double current_latitude = 0.0;
+        double current_longitude = 0.0;
+        double current_yaw_deg = 0.0;
+        double current_speed_mps = 0.0;
         double current_x_m = 0.0;
         double current_y_m = 0.0;
-        if (gps_valid && local_frame_valid) {
-            std::tie(current_x_m, current_y_m) = localPlanarOffsetMeters(
-                local_frame_state.origin_latitude,
-                local_frame_state.origin_longitude,
-                current_latitude,
-                current_longitude);
+        bool control_pose_initialized = false;
+        bool control_pose_valid = false;
+        std::string control_heading_source = auto_workspace_gps_state.heading_source;
+
+        if (use_gnss_imu_ekf) {
+            control_heading_source = "gnss_imu_ekf";
+            if (local_frame_valid && fusion_state.initialized) {
+                current_x_m = fusion_state.x_m;
+                current_y_m = fusion_state.y_m;
+                current_yaw_deg = fusion_state.heading_deg;
+                current_speed_mps = fusion_state.speed_mps;
+                std::tie(current_latitude, current_longitude) =
+                    latLonFromLocalPlanarOffsetMeters(
+                        local_frame_state.origin_latitude,
+                        local_frame_state.origin_longitude,
+                        current_x_m,
+                        current_y_m);
+                control_pose_initialized =
+                    std::isfinite(current_latitude) &&
+                    std::isfinite(current_longitude);
+            }
+            control_pose_valid =
+                control_pose_initialized && fusion_state.initialized && fusion_state.valid;
+        } else {
+            current_latitude =
+                gps_valid ? auto_workspace_gps_state.latitude : 0.0;
+            current_longitude =
+                gps_valid ? auto_workspace_gps_state.longitude : 0.0;
+            current_yaw_deg =
+                heading_valid ? auto_workspace_gps_state.heading_deg : 0.0;
+            current_speed_mps =
+                auto_workspace_gps_state.velocity_valid ?
+                    auto_workspace_gps_state.speed_m_s :
+                    0.0;
+            if (gps_valid && local_frame_valid) {
+                std::tie(current_x_m, current_y_m) = localPlanarOffsetMeters(
+                    local_frame_state.origin_latitude,
+                    local_frame_state.origin_longitude,
+                    current_latitude,
+                    current_longitude);
+                control_pose_initialized = true;
+            }
+            control_pose_valid = gps_valid && heading_valid && local_frame_valid;
         }
 
-        AutoWorkspaceRuntimeState runtime_update;
-        {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            runtime_update = auto_workspace_runtime_state_;
-        }
         runtime_update.plan_ready = plan_state.valid;
         runtime_update.gps_valid = gps_valid;
         runtime_update.imu_valid = imu_valid;
-        runtime_update.heading_valid = heading_valid;
+        runtime_update.heading_valid =
+            use_gnss_imu_ekf ? (fusion_state.valid && fusion_state.initialized) : heading_valid;
         runtime_update.local_frame_valid = local_frame_valid;
         runtime_update.last_control_cycle_id = control_cycle_id;
-        runtime_update.current_latitude = current_latitude;
-        runtime_update.current_longitude = current_longitude;
-        runtime_update.current_x_m = current_x_m;
-        runtime_update.current_y_m = current_y_m;
-        runtime_update.current_yaw_deg = current_yaw_deg;
-        runtime_update.heading_source = auto_workspace_gps_state.heading_source;
+        runtime_update.current_latitude = control_pose_initialized ? current_latitude : 0.0;
+        runtime_update.current_longitude = control_pose_initialized ? current_longitude : 0.0;
+        runtime_update.current_x_m = control_pose_initialized ? current_x_m : 0.0;
+        runtime_update.current_y_m = control_pose_initialized ? current_y_m : 0.0;
+        runtime_update.current_yaw_deg =
+            (use_gnss_imu_ekf || heading_valid) ? current_yaw_deg : 0.0;
+        runtime_update.current_speed_mps = current_speed_mps;
+        runtime_update.heading_source = control_heading_source;
         runtime_update.destination_x_m = plan_state.destination_x_m;
         runtime_update.destination_y_m = plan_state.destination_y_m;
         runtime_update.route_provider = plan_state.route_provider;
-        if (gps_valid && local_frame_valid) {
+        if (control_pose_valid) {
             AutoWorkspaceRuntimeState::TrackPoint track_point;
             track_point.latitude = current_latitude;
             track_point.longitude = current_longitude;
@@ -3921,23 +3959,56 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
             break;
         }
 
-        if (!gps_valid || !imu_valid || !heading_valid || !local_frame_valid) {
-            std::string waiting_message = "自动任务等待传感器";
-            if (!gps_sample_ready) {
-                waiting_message = "自动任务等待 GPS";
-            } else if (!timing.gps_fresh) {
-                waiting_message = "自动任务等待 GPS 更新时间";
-            } else if (!imu_present) {
-                waiting_message = "自动任务等待 IMU";
-            } else if (!timing.imu_fresh) {
-                waiting_message = "自动任务等待 IMU 更新时间";
-            } else if (!timing.gps_imu_aligned) {
-                waiting_message = "自动任务等待 GPS/IMU 时间对齐";
-            } else if (!gps_pose_ready) {
-                waiting_message = "自动任务等待 GPS/IMU 车体位姿对齐";
-            } else if (!local_frame_valid) {
-                waiting_message = "自动任务等待 XY 原点";
+        bool should_wait_for_pose = false;
+        std::string waiting_phase = "waiting_sensor";
+        std::string waiting_message = "自动任务等待传感器";
+        if (use_gnss_imu_ekf) {
+            should_wait_for_pose = !local_frame_valid || !fusion_state.valid;
+            if (should_wait_for_pose) {
+                waiting_phase =
+                    (local_frame_valid && fusion_state.initialized) ?
+                        "fusion_invalid" :
+                        "waiting_sensor";
+                if (!local_frame_valid) {
+                    waiting_message = "自动任务等待 XY 原点";
+                } else if (!imu_present) {
+                    waiting_message = "自动任务等待 IMU";
+                } else if (!gps_sample_ready) {
+                    waiting_message = "自动任务等待 GPS";
+                } else if (!fusion_state.initialized) {
+                    waiting_message = "自动任务等待组合导航初始化";
+                } else if (fusion_state.imu_age_ms >= 0.0 &&
+                           fusion_state.imu_age_ms >
+                               static_cast<double>(kAutoWorkspaceImuFreshLimit.count())) {
+                    waiting_message = "等待组合导航/IMU无效";
+                } else if (fusion_state.gps_age_ms >= 0.0 &&
+                           fusion_state.gps_age_ms > 3000.0) {
+                    waiting_message = "等待组合导航/GPS超时";
+                } else {
+                    waiting_message = "等待组合导航输出";
+                }
             }
+        } else {
+            should_wait_for_pose = !gps_valid || !imu_valid || !heading_valid || !local_frame_valid;
+            if (should_wait_for_pose) {
+                if (!gps_sample_ready) {
+                    waiting_message = "自动任务等待 GPS";
+                } else if (!timing.gps_fresh) {
+                    waiting_message = "自动任务等待 GPS 更新时间";
+                } else if (!imu_present) {
+                    waiting_message = "自动任务等待 IMU";
+                } else if (!timing.imu_fresh) {
+                    waiting_message = "自动任务等待 IMU 更新时间";
+                } else if (!timing.gps_imu_aligned) {
+                    waiting_message = "自动任务等待 GPS/IMU 时间对齐";
+                } else if (!gps_pose_ready) {
+                    waiting_message = "自动任务等待 GPS/IMU 车体位姿对齐";
+                } else if (!local_frame_valid) {
+                    waiting_message = "自动任务等待 XY 原点";
+                }
+            }
+        }
+        if (should_wait_for_pose) {
             applyAutoWorkspaceDriveCommand(
                 true,
                 0,
@@ -3950,7 +4021,7 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
                 control_cycle_id);
             runtime_update.task_running = true;
             runtime_update.avoidance_active = false;
-            runtime_update.phase = "waiting_sensor";
+            runtime_update.phase = waiting_phase;
             runtime_update.message = waiting_message;
             runtime_update.command_speed_cm_s = 0;
             runtime_update.command_steering_encoder = 0;
@@ -4050,15 +4121,13 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
         auto snapshot = autoWorkspaceAvoidSensorSnapshot();
         const bool avoidance_timing_ready = timing.avoidance_ready;
         const bool front_close =
+            auto_workspace_enable_front_avoidance_handover_ &&
             avoidance_timing_ready &&
             snapshot.lidar_valid &&
             snapshot.front.valid &&
             std::isfinite(snapshot.front.nearest_m) &&
             snapshot.front.nearest_m <
                 auto_workspace_avoid_controller_.config().avoidance_turn_max_distance_m;
-        const bool controller_avoidance_active =
-            auto_workspace_avoid_controller_.currentAvoidanceStage() !=
-                AutoAvoidController::AvoidanceStage::Idle;
         if ((controller_avoidance_active || front_close) && !avoidance_timing_ready) {
             applyAutoWorkspaceDriveCommand(
                 true,
@@ -4136,10 +4205,25 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
             has_last_avoidance_command = false;
             last_avoidance_command = AutoAvoidController::Command{};
 
-            const int speed_cm_s =
+            int speed_cm_s =
                 remaining_distance_m <= kAutoWorkspaceApproachDistanceM ?
                     kAutoWorkspaceApproachSpeedCmS :
                     kAutoWorkspaceCruiseSpeedCmS;
+            std::string tracking_message = "自动任务沿道路路径前进中";
+            if (use_gnss_imu_ekf) {
+                if (fusion_state.mode == navigation::FusionMode::kGpsHold) {
+                    speed_cm_s = std::min(speed_cm_s, kAutoWorkspaceGpsHoldSpeedLimitCmS);
+                    tracking_message = "GPS短时保持，组合导航继续输出";
+                } else if (fusion_state.mode == navigation::FusionMode::kDegraded) {
+                    speed_cm_s = std::min(speed_cm_s, kAutoWorkspaceDegradedSpeedLimitCmS);
+                    tracking_message = "组合导航降级，低速保持";
+                } else if (fusion_state.mode == navigation::FusionMode::kAligning) {
+                    tracking_message =
+                        auto_workspace_use_gps_course_alignment_ ?
+                            "航向对齐中，组合导航已接入" :
+                            "组合导航已接入，当前使用 IMU 航向";
+                }
+            }
             const int steering_encoder =
                 autoWorkspaceSteeringEncoderForHeadingError(heading_error_deg);
             applyAutoWorkspaceDriveCommand(
@@ -4155,7 +4239,7 @@ void LogDashboardServer::runAutoWorkspaceControlLoop() {
             runtime_update.task_running = true;
             runtime_update.avoidance_active = false;
             runtime_update.phase = "tracking";
-            runtime_update.message = "自动任务沿道路路径前进中";
+            runtime_update.message = tracking_message;
             runtime_update.command_speed_cm_s = speed_cm_s;
             runtime_update.command_steering_encoder = steering_encoder;
             {
@@ -4497,6 +4581,7 @@ void LogDashboardServer::onLidarScan(const sensor_msgs::msg::LaserScan::SharedPt
 
 void LogDashboardServer::onImu(const sensor_msgs::msg::Imu::SharedPtr msg) {
     const auto now = std::chrono::steady_clock::now();
+    const double stamp_s = steadySeconds(now);
     const bool source_stamp_valid =
         msg &&
         !(msg->header.stamp.sec == 0 && msg->header.stamp.nanosec == 0);
@@ -4506,6 +4591,7 @@ void LogDashboardServer::onImu(const sensor_msgs::msg::Imu::SharedPtr msg) {
     double roll_deg = 0.0;
     double pitch_deg = 0.0;
     double yaw_deg = 0.0;
+    double yaw_rad = 0.0;
     if (!msg) {
         auto_avoid_control_snapshot_pool_.updateImu(
             false,
@@ -4542,7 +4628,8 @@ void LogDashboardServer::onImu(const sensor_msgs::msg::Imu::SharedPtr msg) {
                 std::abs(sinp) >= 1.0 ?
                     std::copysign(90.0, sinp) :
                     std::asin(sinp) * rad_to_deg;
-            yaw_deg = std::atan2(siny_cosp, cosy_cosp) * rad_to_deg;
+            yaw_rad = std::atan2(siny_cosp, cosy_cosp);
+            yaw_deg = yaw_rad * rad_to_deg;
             has_attitude = true;
         }
         auto_avoid_control_snapshot_pool_.updateImu(
@@ -4560,6 +4647,7 @@ void LogDashboardServer::onImu(const sensor_msgs::msg::Imu::SharedPtr msg) {
     }
 
     std::lock_guard<std::mutex> lock(state_mutex_);
+    const auto fusion_before = autoWorkspaceGnssImuEkfStateLocked(stamp_s);
     imu_state_.message_count += 1;
     imu_state_.last_message_steady_ = now;
     imu_state_.source_stamp_valid = source_stamp_valid;
@@ -4576,9 +4664,22 @@ void LogDashboardServer::onImu(const sensor_msgs::msg::Imu::SharedPtr msg) {
     auto_workspace_imu_state_.pitch_deg = pitch_deg;
     auto_workspace_imu_state_.yaw_deg = yaw_deg;
     auto_workspace_imu_state_.has_attitude = has_attitude;
+    if (msg) {
+        navigation::ImuSample imu_sample;
+        imu_sample.stamp_s = stamp_s;
+        imu_sample.yaw_rad = yaw_rad;
+        imu_sample.gyro_z_rad_s =
+            std::isfinite(msg->angular_velocity.z) ? msg->angular_velocity.z : 0.0;
+        imu_sample.yaw_valid = has_attitude;
+        imu_sample.gyro_valid = std::isfinite(msg->angular_velocity.z);
+        auto_gnss_imu_ekf_.updateImu(imu_sample);
+    }
     if (auto_workspace_gps_state_.has_position) {
         updateAutoWorkspaceFilteredGpsLocked(now);
     }
+    maybeInitializeAutoWorkspaceGnssImuEkfLocked(stamp_s);
+    const auto fusion_after = autoWorkspaceGnssImuEkfStateLocked(stamp_s);
+    logAutoWorkspaceFusionStateTransitionLocked(fusion_before, fusion_after);
 }
 
 void LogDashboardServer::resetGpsFilterLocked() {
@@ -4690,6 +4791,137 @@ void LogDashboardServer::updateFilteredGpsLocked(
         cluster_radius_m <= kGpsOriginStableRadiusM;
     gps_state_.origin_stable = origin_stable;
 
+}
+
+void LogDashboardServer::resetAutoWorkspaceGnssImuEkfLocked() {
+    auto_gnss_imu_ekf_.reset();
+    auto_gnss_imu_ekf_.setMotionHint(navigation::MotionHint{});
+    auto_workspace_last_fusion_reject_log_ = std::chrono::steady_clock::time_point{};
+    auto_workspace_last_fusion_yaw_log_ = std::chrono::steady_clock::time_point{};
+}
+
+void LogDashboardServer::maybeInitializeAutoWorkspaceGnssImuEkfLocked(double stamp_s) {
+    if (!std::isfinite(stamp_s) ||
+        !auto_workspace_local_frame_state_.valid ||
+        !auto_workspace_gps_state_.filtered_valid ||
+        !auto_workspace_gps_state_.base_link_valid ||
+        !auto_workspace_imu_state_.has_attitude ||
+        (std::chrono::steady_clock::now() - auto_workspace_imu_state_.last_message_steady_) >
+            kAutoWorkspaceImuFreshLimit ||
+        !std::isfinite(auto_workspace_imu_state_.yaw_deg)) {
+        return;
+    }
+
+    if (auto_gnss_imu_ekf_.state(stamp_s).initialized) {
+        return;
+    }
+
+    double current_x_m = 0.0;
+    double current_y_m = 0.0;
+    std::tie(current_x_m, current_y_m) = localPlanarOffsetMeters(
+        auto_workspace_local_frame_state_.origin_latitude,
+        auto_workspace_local_frame_state_.origin_longitude,
+        auto_workspace_gps_state_.latitude,
+        auto_workspace_gps_state_.longitude);
+    auto_gnss_imu_ekf_.resetToPose(
+        stamp_s,
+        current_x_m,
+        current_y_m,
+        degToRad(auto_workspace_imu_state_.yaw_deg));
+}
+
+navigation::GnssImuEkfState LogDashboardServer::autoWorkspaceGnssImuEkfStateLocked(
+    double now_s) const {
+    return auto_gnss_imu_ekf_.state(now_s);
+}
+
+void LogDashboardServer::applyAutoWorkspaceFusionRuntimeLocked(
+    AutoWorkspaceRuntimeState& runtime_state,
+    const navigation::GnssImuEkfState& fusion_state) const {
+    runtime_state.fusion_valid = fusion_state.valid;
+    runtime_state.fusion_mode = navigation::fusionModeToString(fusion_state.mode);
+    runtime_state.fusion_quality = fusion_state.quality;
+    runtime_state.fusion_x_m = fusion_state.x_m;
+    runtime_state.fusion_y_m = fusion_state.y_m;
+    runtime_state.fusion_heading_deg = fusion_state.heading_deg;
+    runtime_state.fusion_speed_mps = fusion_state.speed_mps;
+    runtime_state.fusion_yaw_offset_deg = radToDeg(fusion_state.yaw_offset_rad);
+    runtime_state.fusion_yaw_aligned = fusion_state.yaw_aligned;
+    runtime_state.fusion_holdover_ms = fusion_state.holdover_ms;
+    runtime_state.fusion_gps_age_ms = fusion_state.gps_age_ms;
+    runtime_state.fusion_imu_age_ms = fusion_state.imu_age_ms;
+    runtime_state.fusion_gps_used = fusion_state.last_gps_used;
+    runtime_state.fusion_gps_rejected_count = fusion_state.gps_rejected_count;
+    runtime_state.fusion_last_reject_reason = fusion_state.last_reject_reason;
+    runtime_state.control_position_source =
+        auto_workspace_use_gnss_imu_ekf_ ? "gnss_imu_ekf" : "legacy_gps_imu";
+}
+
+void LogDashboardServer::logAutoWorkspaceFusionStateTransitionLocked(
+    const navigation::GnssImuEkfState& before,
+    const navigation::GnssImuEkfState& after) {
+    if (!before.initialized && after.initialized) {
+        std::ostringstream out;
+        out << "AUTO fusion EKF initialized: x="
+            << std::fixed << std::setprecision(3) << after.x_m
+            << " m, y=" << after.y_m
+            << " m, heading=" << std::setprecision(2) << after.heading_deg
+            << " deg";
+        log_info(kLogModule, out.str());
+    }
+
+    if (before.mode != after.mode) {
+        log_info(
+            kLogModule,
+            std::string("AUTO fusion mode changed: ") +
+                navigation::fusionModeToString(before.mode) + " -> " +
+                navigation::fusionModeToString(after.mode));
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const double yaw_offset_delta_deg = std::abs(
+        normalizeHeadingDifferenceDeg(
+            radToDeg(after.yaw_offset_rad - before.yaw_offset_rad)));
+    if ((!before.yaw_aligned && after.yaw_aligned) ||
+        (yaw_offset_delta_deg >= 3.0 &&
+            (auto_workspace_last_fusion_yaw_log_ ==
+                 std::chrono::steady_clock::time_point{} ||
+             (now - auto_workspace_last_fusion_yaw_log_) >=
+                 std::chrono::seconds(1)))) {
+        std::ostringstream out;
+        out << (after.yaw_aligned && !before.yaw_aligned ?
+                    "AUTO fusion yaw offset aligned: " :
+                    "AUTO fusion yaw offset updated: ")
+            << std::fixed << std::setprecision(2)
+            << radToDeg(after.yaw_offset_rad) << " deg";
+        log_info(kLogModule, out.str());
+        auto_workspace_last_fusion_yaw_log_ = now;
+    }
+
+    if (after.gps_rejected_count > before.gps_rejected_count &&
+        (!after.last_reject_reason.empty()) &&
+        (auto_workspace_last_fusion_reject_log_ ==
+             std::chrono::steady_clock::time_point{} ||
+         (now - auto_workspace_last_fusion_reject_log_) >=
+             std::chrono::seconds(1) ||
+         after.last_reject_reason != before.last_reject_reason)) {
+        std::ostringstream out;
+        if (after.last_reject_reason == "static_drift_hold") {
+            out << "AUTO fusion GPS static drift hold: drift="
+                << std::fixed << std::setprecision(3)
+                << after.last_gps_innovation_m << " m, count="
+                << after.gps_rejected_count;
+            log_info(kLogModule, out.str());
+        } else {
+            out << "AUTO fusion GPS rejected: reason="
+                << after.last_reject_reason
+                << ", innovation=" << std::fixed << std::setprecision(3)
+                << after.last_gps_innovation_m << " m, count="
+                << after.gps_rejected_count;
+            log_warn(kLogModule, out.str());
+        }
+        auto_workspace_last_fusion_reject_log_ = now;
+    }
 }
 
 void LogDashboardServer::updateAutoWorkspaceHeadingFromRouteLocked(double route_bearing_deg) {
@@ -4962,6 +5194,36 @@ void LogDashboardServer::updateAutoWorkspaceFilteredGpsLocked(
             fusion.anchor_longitude,
             centroid_x_m,
             centroid_y_m);
+        if (auto_workspace_last_origin_debug_log_ ==
+                std::chrono::steady_clock::time_point{} ||
+            (now - auto_workspace_last_origin_debug_log_) >=
+                std::chrono::seconds(1)) {
+            std::ostringstream out;
+            out << "AUTO origin lock candidate: raw=("
+                << std::fixed << std::setprecision(7)
+                << latitude << "," << longitude
+                << "), filtered=("
+                << processed_latitude << "," << processed_longitude
+                << "), origin=("
+                << origin_latitude << "," << origin_longitude
+                << "), cluster_radius=" << std::setprecision(3)
+                << cluster_radius_m
+                << " m, accuracy_ok=" << (accuracy_ok ? "true" : "false")
+                << ", gps_covariance_available="
+                << (auto_workspace_gps_state_.horizontal_covariance_available ? "true" : "false")
+                << ", gps_accuracy_m=";
+            if (auto_workspace_gps_state_.horizontal_covariance_available &&
+                std::isfinite(horizontal_stddev_m)) {
+                out << std::setprecision(2) << horizontal_stddev_m;
+            } else {
+                out << "null";
+            }
+            out << ", local_frame_valid="
+                << (auto_workspace_local_frame_state_.valid ? "true" : "false")
+                << ", using_filtered_point=true";
+            log_info(kLogModule, out.str());
+            auto_workspace_last_origin_debug_log_ = now;
+        }
         auto_workspace_local_frame_state_.valid = true;
         auto_workspace_local_frame_state_.origin_latitude = origin_latitude;
         auto_workspace_local_frame_state_.origin_longitude = origin_longitude;
@@ -4985,6 +5247,7 @@ void LogDashboardServer::updateAutoWorkspaceFilteredGpsLocked(
 
 void LogDashboardServer::onGpsFix(const sensor_msgs::msg::NavSatFix::SharedPtr msg) {
     const auto now = std::chrono::steady_clock::now();
+    const double stamp_s = steadySeconds(now);
     const bool source_stamp_valid =
         msg &&
         !(msg->header.stamp.sec == 0 && msg->header.stamp.nanosec == 0);
@@ -4997,6 +5260,7 @@ void LogDashboardServer::onGpsFix(const sensor_msgs::msg::NavSatFix::SharedPtr m
         std::isfinite(msg->longitude);
     const bool valid_fix_position = has_position && status >= 0;
     std::lock_guard<std::mutex> lock(state_mutex_);
+    const auto fusion_before = autoWorkspaceGnssImuEkfStateLocked(stamp_s);
     gps_state_.message_count += 1;
     gps_state_.last_message_steady_ = now;
     gps_state_.source_stamp_valid = source_stamp_valid;
@@ -5009,6 +5273,21 @@ void LogDashboardServer::onGpsFix(const sensor_msgs::msg::NavSatFix::SharedPtr m
         gps_state_.raw_altitude = std::isfinite(msg->altitude) ? msg->altitude : 0.0;
     }
 
+    double horizontal_stddev_m = std::numeric_limits<double>::quiet_NaN();
+    bool horizontal_covariance_available = false;
+    if (msg &&
+        msg->position_covariance_type != sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN) {
+        const double east_cov = msg->position_covariance[0];
+        const double north_cov = msg->position_covariance[4];
+        if (std::isfinite(east_cov) && east_cov >= 0.0 &&
+            std::isfinite(north_cov) && north_cov >= 0.0) {
+            horizontal_stddev_m = std::sqrt(std::max(east_cov, north_cov));
+            horizontal_covariance_available = std::isfinite(horizontal_stddev_m);
+        }
+    }
+    gps_state_.horizontal_stddev_m = horizontal_stddev_m;
+    gps_state_.horizontal_covariance_available = horizontal_covariance_available;
+
     if (!valid_fix_position) {
         resetGpsFilterLocked();
         auto_workspace_gps_state_.message_count += 1;
@@ -5017,18 +5296,21 @@ void LogDashboardServer::onGpsFix(const sensor_msgs::msg::NavSatFix::SharedPtr m
         auto_workspace_gps_state_.last_source_stamp = source_stamp;
         auto_workspace_gps_state_.status = status;
         auto_workspace_gps_state_.has_position = has_position;
-        resetAutoWorkspaceGpsFilterLocked();
-        return;
-    }
-
-    double horizontal_stddev_m = std::numeric_limits<double>::quiet_NaN();
-    if (msg->position_covariance_type != sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN) {
-        const double east_cov = msg->position_covariance[0];
-        const double north_cov = msg->position_covariance[4];
-        if (std::isfinite(east_cov) && east_cov >= 0.0 &&
-            std::isfinite(north_cov) && north_cov >= 0.0) {
-            horizontal_stddev_m = std::sqrt(std::max(east_cov, north_cov));
+        if (has_position) {
+            auto_workspace_gps_state_.raw_latitude = msg->latitude;
+            auto_workspace_gps_state_.raw_longitude = msg->longitude;
+            auto_workspace_gps_state_.raw_altitude =
+                std::isfinite(msg->altitude) ? msg->altitude : 0.0;
         }
+        gps_state_.horizontal_covariance_available = horizontal_covariance_available;
+        auto_workspace_gps_state_.horizontal_stddev_m = horizontal_stddev_m;
+        auto_workspace_gps_state_.horizontal_covariance_available =
+            horizontal_covariance_available;
+        resetAutoWorkspaceGpsFilterLocked();
+        resetAutoWorkspaceGnssImuEkfLocked();
+        const auto fusion_after = autoWorkspaceGnssImuEkfStateLocked(stamp_s);
+        logAutoWorkspaceFusionStateTransitionLocked(fusion_before, fusion_after);
+        return;
     }
 
     updateFilteredGpsLocked(
@@ -5047,13 +5329,41 @@ void LogDashboardServer::onGpsFix(const sensor_msgs::msg::NavSatFix::SharedPtr m
     auto_workspace_gps_state_.raw_longitude = msg->longitude;
     auto_workspace_gps_state_.raw_altitude =
         std::isfinite(msg->altitude) ? msg->altitude : 0.0;
+    gps_state_.horizontal_covariance_available = horizontal_covariance_available;
     auto_workspace_gps_state_.horizontal_stddev_m = horizontal_stddev_m;
-    updateAutoWorkspaceFilteredGpsLocked(
-        now);
+    auto_workspace_gps_state_.horizontal_covariance_available =
+        horizontal_covariance_available;
+    updateAutoWorkspaceFilteredGpsLocked(now);
+
+    if (auto_workspace_local_frame_state_.valid &&
+        auto_workspace_gps_state_.filtered_valid &&
+        auto_workspace_gps_state_.base_link_valid &&
+        std::isfinite(auto_workspace_gps_state_.latitude) &&
+        std::isfinite(auto_workspace_gps_state_.longitude)) {
+        double control_x_m = 0.0;
+        double control_y_m = 0.0;
+        std::tie(control_x_m, control_y_m) = localPlanarOffsetMeters(
+            auto_workspace_local_frame_state_.origin_latitude,
+            auto_workspace_local_frame_state_.origin_longitude,
+            auto_workspace_gps_state_.latitude,
+            auto_workspace_gps_state_.longitude);
+        navigation::GnssPositionSample gps_sample;
+        gps_sample.stamp_s = stamp_s;
+        gps_sample.x_m = control_x_m;
+        gps_sample.y_m = control_y_m;
+        gps_sample.horizontal_stddev_m =
+            std::isfinite(horizontal_stddev_m) ? horizontal_stddev_m : 1.5;
+        gps_sample.valid = true;
+        auto_gnss_imu_ekf_.updateGnssPosition(gps_sample);
+    }
+    maybeInitializeAutoWorkspaceGnssImuEkfLocked(stamp_s);
+    const auto fusion_after = autoWorkspaceGnssImuEkfStateLocked(stamp_s);
+    logAutoWorkspaceFusionStateTransitionLocked(fusion_before, fusion_after);
 }
 
 void LogDashboardServer::onGpsVelocity(const geometry_msgs::msg::TwistStamped::SharedPtr msg) {
     const auto now = std::chrono::steady_clock::now();
+    const double stamp_s = steadySeconds(now);
     const bool source_stamp_valid =
         msg &&
         !(msg->header.stamp.sec == 0 && msg->header.stamp.nanosec == 0);
@@ -5069,14 +5379,17 @@ void LogDashboardServer::onGpsVelocity(const geometry_msgs::msg::TwistStamped::S
         std::isfinite(msg->twist.linear.y);
     const double speed_m_s =
         velocity_valid ? std::hypot(velocity_x_m_s, velocity_y_m_s) : 0.0;
+    const double course_yaw_rad =
+        velocity_valid ? std::atan2(velocity_y_m_s, velocity_x_m_s) : 0.0;
     const bool course_valid =
         velocity_valid &&
-        speed_m_s >= kAutoWorkspaceGpsCourseMinSpeedMps &&
-        speed_m_s <= kAutoWorkspaceGpsMaxSpeedMps;
+        speed_m_s > 0.25 &&
+        std::isfinite(course_yaw_rad);
     const double course_deg =
         course_valid ? planarBearingDeg(velocity_x_m_s, velocity_y_m_s) : 0.0;
 
     std::lock_guard<std::mutex> lock(state_mutex_);
+    const auto fusion_before = autoWorkspaceGnssImuEkfStateLocked(stamp_s);
     gps_state_.velocity_message_count += 1;
     gps_state_.last_velocity_steady_ = now;
     gps_state_.velocity_source_stamp_valid = source_stamp_valid;
@@ -5098,7 +5411,32 @@ void LogDashboardServer::onGpsVelocity(const geometry_msgs::msg::TwistStamped::S
     auto_workspace_gps_state_.speed_m_s = speed_m_s;
     auto_workspace_gps_state_.course_valid = course_valid;
     auto_workspace_gps_state_.course_deg = course_deg;
-
+    const bool controller_avoidance_active =
+        auto_workspace_avoid_controller_.currentAvoidanceStage() !=
+        AutoAvoidController::AvoidanceStage::Idle;
+    const bool allow_course_alignment =
+        auto_workspace_use_gps_course_alignment_ &&
+        !auto_workspace_runtime_state_.avoidance_active &&
+        !controller_avoidance_active &&
+        !stm32_emergency_active_.load() &&
+        !auto_workspace_runtime_state_.target_reached;
+    const bool vehicle_commanded_moving =
+        auto_workspace_runtime_state_.command_speed_cm_s > 10 ||
+        (auto_workspace_runtime_state_.task_running &&
+         auto_workspace_runtime_state_.command_speed_cm_s > 0) ||
+        speed_m_s > 0.25;
+    navigation::GnssVelocitySample vel_sample;
+    vel_sample.stamp_s = stamp_s;
+    vel_sample.speed_mps = speed_m_s;
+    vel_sample.course_yaw_rad = course_yaw_rad;
+    vel_sample.speed_valid = velocity_valid && std::isfinite(speed_m_s);
+    vel_sample.course_valid = course_valid;
+    auto_gnss_imu_ekf_.updateGnssVelocity(
+        vel_sample,
+        allow_course_alignment,
+        vehicle_commanded_moving);
+    const auto fusion_after = autoWorkspaceGnssImuEkfStateLocked(stamp_s);
+    logAutoWorkspaceFusionStateTransitionLocked(fusion_before, fusion_after);
 }
 
 void LogDashboardServer::onRgbYolo(const std_msgs::msg::String::SharedPtr msg) {
@@ -5135,6 +5473,9 @@ std::string LogDashboardServer::stateJson() const {
     AutoWorkspacePlanState auto_workspace_plan_state;
     AutoWorkspaceRuntimeState auto_workspace_runtime_state;
     AutoWorkspaceLocalFrameState auto_workspace_local_frame_state;
+    navigation::GnssImuEkfState auto_workspace_fusion_state;
+    bool auto_workspace_use_gnss_imu_ekf = false;
+    const double auto_workspace_now_s = steadySeconds(now_steady);
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         depth_state = depth_state_;
@@ -5154,6 +5495,11 @@ std::string LogDashboardServer::stateJson() const {
         auto_workspace_plan_state = auto_workspace_plan_state_;
         auto_workspace_runtime_state = auto_workspace_runtime_state_;
         auto_workspace_local_frame_state = auto_workspace_local_frame_state_;
+        auto_workspace_use_gnss_imu_ekf = auto_workspace_use_gnss_imu_ekf_;
+        auto_workspace_fusion_state = autoWorkspaceGnssImuEkfStateLocked(auto_workspace_now_s);
+        applyAutoWorkspaceFusionRuntimeLocked(
+            auto_workspace_runtime_state,
+            auto_workspace_fusion_state);
     }
 
     const bool common_auto_workspace = active_workspace_mode == "AUTO";
@@ -5335,29 +5681,70 @@ std::string LogDashboardServer::stateJson() const {
         auto_workspace_imu_state.message_count > 0 &&
         auto_workspace_timing.imu_fresh;
     const bool auto_workspace_heading_valid =
-        auto_workspace_imu_valid &&
-        auto_workspace_gps_state.heading_valid &&
-        auto_workspace_timing.gps_imu_aligned;
+        auto_workspace_use_gnss_imu_ekf ?
+            (auto_workspace_fusion_state.initialized &&
+             auto_workspace_fusion_state.valid) :
+            (auto_workspace_imu_valid &&
+             auto_workspace_gps_state.heading_valid &&
+             auto_workspace_timing.gps_imu_aligned);
     const bool auto_workspace_lidar_valid =
         stack_process.running &&
         auto_workspace_lidar_state.valid &&
         auto_workspace_lidar_state.message_count > 0 &&
         auto_workspace_timing.lidar_fresh;
     const bool auto_workspace_origin_valid = auto_workspace_local_frame_state.valid;
-    const bool auto_workspace_local_valid = auto_workspace_gps_valid && auto_workspace_origin_valid;
+    const bool auto_workspace_local_valid = auto_workspace_origin_valid;
+    double auto_workspace_current_latitude = auto_workspace_runtime_state.current_latitude;
+    double auto_workspace_current_longitude = auto_workspace_runtime_state.current_longitude;
     double auto_workspace_current_x_m = auto_workspace_runtime_state.current_x_m;
     double auto_workspace_current_y_m = auto_workspace_runtime_state.current_y_m;
+    double auto_workspace_current_yaw_deg = auto_workspace_runtime_state.current_yaw_deg;
+    double auto_workspace_current_speed_mps = auto_workspace_runtime_state.current_speed_mps;
+    bool auto_workspace_control_pose_initialized = false;
     double auto_workspace_raw_x_m = std::numeric_limits<double>::quiet_NaN();
     double auto_workspace_raw_y_m = std::numeric_limits<double>::quiet_NaN();
     double auto_workspace_filtered_gps_x_m = std::numeric_limits<double>::quiet_NaN();
     double auto_workspace_filtered_gps_y_m = std::numeric_limits<double>::quiet_NaN();
-    if (auto_workspace_local_valid) {
-        std::tie(auto_workspace_current_x_m, auto_workspace_current_y_m) =
-            localPlanarOffsetMeters(
-                auto_workspace_local_frame_state.origin_latitude,
-                auto_workspace_local_frame_state.origin_longitude,
-                auto_workspace_gps_state.latitude,
-                auto_workspace_gps_state.longitude);
+    if (auto_workspace_use_gnss_imu_ekf) {
+        if (auto_workspace_origin_valid && auto_workspace_fusion_state.initialized) {
+            auto_workspace_current_x_m = auto_workspace_fusion_state.x_m;
+            auto_workspace_current_y_m = auto_workspace_fusion_state.y_m;
+            auto_workspace_current_yaw_deg = auto_workspace_fusion_state.heading_deg;
+            auto_workspace_current_speed_mps = auto_workspace_fusion_state.speed_mps;
+            std::tie(auto_workspace_current_latitude, auto_workspace_current_longitude) =
+                latLonFromLocalPlanarOffsetMeters(
+                    auto_workspace_local_frame_state.origin_latitude,
+                    auto_workspace_local_frame_state.origin_longitude,
+                    auto_workspace_current_x_m,
+                    auto_workspace_current_y_m);
+            auto_workspace_control_pose_initialized =
+                std::isfinite(auto_workspace_current_latitude) &&
+                std::isfinite(auto_workspace_current_longitude);
+        }
+        auto_workspace_runtime_state.heading_source = "gnss_imu_ekf";
+    } else {
+        if (auto_workspace_local_valid && auto_workspace_gps_valid) {
+            std::tie(auto_workspace_current_x_m, auto_workspace_current_y_m) =
+                localPlanarOffsetMeters(
+                    auto_workspace_local_frame_state.origin_latitude,
+                    auto_workspace_local_frame_state.origin_longitude,
+                    auto_workspace_gps_state.latitude,
+                    auto_workspace_gps_state.longitude);
+        }
+        auto_workspace_current_latitude =
+            auto_workspace_gps_valid ? auto_workspace_gps_state.latitude : 0.0;
+        auto_workspace_current_longitude =
+            auto_workspace_gps_valid ? auto_workspace_gps_state.longitude : 0.0;
+        auto_workspace_current_yaw_deg =
+            auto_workspace_heading_valid ? auto_workspace_gps_state.heading_deg : 0.0;
+        auto_workspace_current_speed_mps =
+            auto_workspace_gps_state.velocity_valid ?
+                auto_workspace_gps_state.speed_m_s :
+                auto_workspace_current_speed_mps;
+        auto_workspace_control_pose_initialized =
+            auto_workspace_gps_valid &&
+            std::isfinite(auto_workspace_current_latitude) &&
+            std::isfinite(auto_workspace_current_longitude);
     }
     if (auto_workspace_origin_valid && auto_workspace_gps_state.has_position) {
         std::tie(auto_workspace_raw_x_m, auto_workspace_raw_y_m) =
@@ -5375,6 +5762,34 @@ std::string LogDashboardServer::stateJson() const {
                 auto_workspace_gps_state.latitude,
                 auto_workspace_gps_state.longitude);
     }
+    const bool auto_gps_debug_raw_valid =
+        auto_workspace_gps_state.has_position &&
+        std::isfinite(auto_workspace_gps_state.raw_latitude) &&
+        std::isfinite(auto_workspace_gps_state.raw_longitude);
+    const bool auto_gps_debug_filtered_valid =
+        auto_workspace_gps_state.filtered_valid &&
+        std::isfinite(auto_workspace_gps_state.latitude) &&
+        std::isfinite(auto_workspace_gps_state.longitude);
+    const bool auto_gps_debug_current_valid =
+        auto_workspace_control_pose_initialized &&
+        std::isfinite(auto_workspace_current_latitude) &&
+        std::isfinite(auto_workspace_current_longitude);
+    const bool auto_gps_debug_origin_valid =
+        auto_workspace_origin_valid &&
+        std::isfinite(auto_workspace_local_frame_state.origin_latitude) &&
+        std::isfinite(auto_workspace_local_frame_state.origin_longitude);
+    const bool auto_gps_debug_local_valid =
+        auto_workspace_origin_valid &&
+        auto_gps_debug_filtered_valid &&
+        std::isfinite(auto_workspace_filtered_gps_x_m) &&
+        std::isfinite(auto_workspace_filtered_gps_y_m);
+    const bool auto_gps_debug_fused_initialized =
+        auto_workspace_fusion_state.initialized &&
+        std::isfinite(auto_workspace_fusion_state.x_m) &&
+        std::isfinite(auto_workspace_fusion_state.y_m);
+    const bool auto_gps_debug_fix_valid =
+        auto_workspace_gps_state.status >= 0 &&
+        auto_workspace_gps_state.has_position;
     const auto auto_workspace_path_json = [&]() {
         std::ostringstream path_out;
         path_out << "[";
@@ -5553,18 +5968,30 @@ std::string LogDashboardServer::stateJson() const {
         << "\"planner\":\"" << jsonEscape(auto_workspace_plan_state.planner) << "\","
         << "\"route_provider\":\"" << jsonEscape(auto_workspace_plan_state.route_provider) << "\","
         << "\"heading_source\":\"" << jsonEscape(auto_workspace_runtime_state.heading_source) << "\","
+        << "\"control_position_source\":\"" <<
+            jsonEscape(auto_workspace_runtime_state.control_position_source) << "\","
         << "\"control_cycle_id\":" << auto_workspace_runtime_state.last_control_cycle_id << ","
         << "\"active_path_index\":" << auto_workspace_runtime_state.active_path_index << ","
         << "\"current_latitude\":" << (
-                auto_workspace_gps_valid ?
-                    numberJson(auto_workspace_gps_state.latitude, 7) :
+                auto_workspace_control_pose_initialized ?
+                    numberJson(auto_workspace_current_latitude, 7) :
                     "null") << ","
         << "\"current_longitude\":" << (
-                auto_workspace_gps_valid ?
-                    numberJson(auto_workspace_gps_state.longitude, 7) :
+                auto_workspace_control_pose_initialized ?
+                    numberJson(auto_workspace_current_longitude, 7) :
                     "null") << ","
-        << "\"current_x_m\":" << numberJson(auto_workspace_current_x_m, 3) << ","
-        << "\"current_y_m\":" << numberJson(auto_workspace_current_y_m, 3) << ","
+        << "\"current_x_m\":" << (
+                auto_workspace_control_pose_initialized ?
+                    numberJson(auto_workspace_current_x_m, 3) :
+                    "null") << ","
+        << "\"current_y_m\":" << (
+                auto_workspace_control_pose_initialized ?
+                    numberJson(auto_workspace_current_y_m, 3) :
+                    "null") << ","
+        << "\"current_speed_mps\":" << (
+                auto_workspace_control_pose_initialized ?
+                    numberJson(auto_workspace_current_speed_mps, 3) :
+                    "null") << ","
         << "\"raw_latitude\":" << (
                 auto_workspace_gps_state.has_position ?
                     numberJson(auto_workspace_gps_state.raw_latitude, 7) :
@@ -5602,9 +6029,48 @@ std::string LogDashboardServer::stateJson() const {
                     numberJson(auto_workspace_gps_state.horizontal_stddev_m, 2) :
                     "null") << ","
         << "\"current_yaw_deg\":" << (
-                auto_workspace_heading_valid ?
-                    numberJson(auto_workspace_gps_state.heading_deg, 2) :
+                (auto_workspace_use_gnss_imu_ekf ?
+                    auto_workspace_fusion_state.initialized :
+                    auto_workspace_heading_valid) ?
+                        numberJson(auto_workspace_current_yaw_deg, 2) :
                     "null") << ","
+        << "\"fusion_valid\":" << boolJson(auto_workspace_runtime_state.fusion_valid) << ","
+        << "\"fusion_mode\":\"" << jsonEscape(auto_workspace_runtime_state.fusion_mode) << "\","
+        << "\"fusion_quality\":" << numberJson(auto_workspace_runtime_state.fusion_quality, 3) << ","
+        << "\"fusion_x_m\":" << (
+                auto_workspace_fusion_state.initialized ?
+                    numberJson(auto_workspace_runtime_state.fusion_x_m, 3) :
+                    "null") << ","
+        << "\"fusion_y_m\":" << (
+                auto_workspace_fusion_state.initialized ?
+                    numberJson(auto_workspace_runtime_state.fusion_y_m, 3) :
+                    "null") << ","
+        << "\"fusion_heading_deg\":" << (
+                auto_workspace_fusion_state.initialized ?
+                    numberJson(auto_workspace_runtime_state.fusion_heading_deg, 2) :
+                    "null") << ","
+        << "\"fusion_speed_mps\":" << (
+                auto_workspace_fusion_state.initialized ?
+                    numberJson(auto_workspace_runtime_state.fusion_speed_mps, 3) :
+                    "null") << ","
+        << "\"fusion_yaw_offset_deg\":" << numberJson(auto_workspace_runtime_state.fusion_yaw_offset_deg, 2) << ","
+        << "\"fusion_yaw_aligned\":" << boolJson(auto_workspace_runtime_state.fusion_yaw_aligned) << ","
+        << "\"fusion_holdover_ms\":" << (
+                auto_workspace_runtime_state.fusion_holdover_ms >= 0.0 ?
+                    numberJson(auto_workspace_runtime_state.fusion_holdover_ms, 1) :
+                    "null") << ","
+        << "\"fusion_gps_age_ms\":" << (
+                auto_workspace_runtime_state.fusion_gps_age_ms >= 0.0 ?
+                    numberJson(auto_workspace_runtime_state.fusion_gps_age_ms, 1) :
+                    "null") << ","
+        << "\"fusion_imu_age_ms\":" << (
+                auto_workspace_runtime_state.fusion_imu_age_ms >= 0.0 ?
+                    numberJson(auto_workspace_runtime_state.fusion_imu_age_ms, 1) :
+                    "null") << ","
+        << "\"fusion_gps_used\":" << boolJson(auto_workspace_runtime_state.fusion_gps_used) << ","
+        << "\"fusion_gps_rejected_count\":" << auto_workspace_runtime_state.fusion_gps_rejected_count << ","
+        << "\"fusion_last_reject_reason\":\"" <<
+            jsonEscape(auto_workspace_runtime_state.fusion_last_reject_reason) << "\","
         << "\"origin_latitude\":" << (
                 auto_workspace_origin_valid ?
                     numberJson(auto_workspace_local_frame_state.origin_latitude, 7) :
@@ -5635,6 +6101,76 @@ std::string LogDashboardServer::stateJson() const {
         << "\"path\":" << (auto_workspace_plan_state.valid ? auto_workspace_path_json() : "[]") << ","
         << "\"actual_track\":" << auto_workspace_actual_track_json()
         << "}"
+        << "},"
+        << "\"auto_gps_debug\":{"
+        << "\"raw_valid\":" << boolJson(auto_gps_debug_raw_valid) << ","
+        << "\"raw_latitude\":" << (
+                auto_gps_debug_raw_valid ?
+                    numberJson(auto_workspace_gps_state.raw_latitude, 7) :
+                    "null") << ","
+        << "\"raw_longitude\":" << (
+                auto_gps_debug_raw_valid ?
+                    numberJson(auto_workspace_gps_state.raw_longitude, 7) :
+                    "null") << ","
+        << "\"filtered_valid\":" << boolJson(auto_gps_debug_filtered_valid) << ","
+        << "\"filtered_latitude\":" << (
+                auto_gps_debug_filtered_valid ?
+                    numberJson(auto_workspace_gps_state.latitude, 7) :
+                    "null") << ","
+        << "\"filtered_longitude\":" << (
+                auto_gps_debug_filtered_valid ?
+                    numberJson(auto_workspace_gps_state.longitude, 7) :
+                    "null") << ","
+        << "\"current_valid\":" << boolJson(auto_gps_debug_current_valid) << ","
+        << "\"current_latitude\":" << (
+                auto_gps_debug_current_valid ?
+                    numberJson(auto_workspace_current_latitude, 7) :
+                    "null") << ","
+        << "\"current_longitude\":" << (
+                auto_gps_debug_current_valid ?
+                    numberJson(auto_workspace_current_longitude, 7) :
+                    "null") << ","
+        << "\"origin_valid\":" << boolJson(auto_gps_debug_origin_valid) << ","
+        << "\"origin_latitude\":" << (
+                auto_gps_debug_origin_valid ?
+                    numberJson(auto_workspace_local_frame_state.origin_latitude, 7) :
+                    "null") << ","
+        << "\"origin_longitude\":" << (
+                auto_gps_debug_origin_valid ?
+                    numberJson(auto_workspace_local_frame_state.origin_longitude, 7) :
+                    "null") << ","
+        << "\"gps_local_valid\":" << boolJson(auto_gps_debug_local_valid) << ","
+        << "\"gps_local_x\":" << (
+                auto_gps_debug_local_valid ?
+                    numberJson(auto_workspace_filtered_gps_x_m, 3) :
+                    "null") << ","
+        << "\"gps_local_y\":" << (
+                auto_gps_debug_local_valid ?
+                    numberJson(auto_workspace_filtered_gps_y_m, 3) :
+                    "null") << ","
+        << "\"fused_valid\":" << boolJson(auto_workspace_fusion_state.valid) << ","
+        << "\"fused_x\":" << (
+                auto_gps_debug_fused_initialized ?
+                    numberJson(auto_workspace_fusion_state.x_m, 3) :
+                    "null") << ","
+        << "\"fused_y\":" << (
+                auto_gps_debug_fused_initialized ?
+                    numberJson(auto_workspace_fusion_state.y_m, 3) :
+                    "null") << ","
+        << "\"fusion_state\":\"" <<
+            jsonEscape(auto_workspace_runtime_state.fusion_mode) << "\","
+        << "\"local_frame_valid\":" << boolJson(auto_workspace_local_valid) << ","
+        << "\"gps_fix_valid\":" << boolJson(auto_gps_debug_fix_valid) << ","
+        << "\"gps_status\":" << auto_workspace_gps_state.status << ","
+        << "\"gps_covariance_available\":" <<
+            boolJson(auto_workspace_gps_state.horizontal_covariance_available) << ","
+        << "\"gps_accuracy_m\":" << (
+                auto_workspace_gps_state.horizontal_covariance_available &&
+                std::isfinite(auto_workspace_gps_state.horizontal_stddev_m) ?
+                    numberJson(auto_workspace_gps_state.horizontal_stddev_m, 2) :
+                    "null") << ","
+        << "\"satellites\":null,"
+        << "\"hdop\":null"
         << "},"
         << "\"rgb_yolo_payload\":\"" << jsonEscape(rgb_yolo_payload) << "\""
         << "}";
