@@ -1540,8 +1540,6 @@ bool LogDashboardServer::stopModeSwitchReady(
     };
 
     const bool gps_ready =
-        selected_gps_state.filtered_valid &&
-        selected_gps_state.status >= 0 &&
         selected_gps_state.message_count > 0 &&
         (now_steady - selected_gps_state.last_message_steady_) <= kSensorFreshWindow;
     const bool imu_ready =
@@ -1565,11 +1563,23 @@ bool LogDashboardServer::stopModeSwitchReady(
         jsonRawFieldTrue(live_rgb_yolo_payload, "model_ready") &&
         extractJsonStringField(live_rgb_yolo_payload, "error").empty();
 
-    push_pending(gps_ready, "GPS");
-    push_pending(imu_ready, "IMU");
-    push_pending(lidar_ready, "雷达");
-    push_pending(depth_ready, "深度相机");
-    push_pending(rgb_ready, "RGB+YOLO");
+    if (target_mode == "AUTO") {
+        push_pending(gps_ready, "GPS");
+        push_pending(imu_ready, "IMU");
+        push_pending(lidar_ready, "雷达");
+    } else if (target_mode == "AVOIDANCE") {
+        push_pending(imu_ready, "IMU");
+        push_pending(lidar_ready, "雷达");
+    } else if (target_mode == "MANUAL") {
+        (void)depth_ready;
+        (void)rgb_ready;
+    } else {
+        push_pending(gps_ready, "GPS");
+        push_pending(imu_ready, "IMU");
+        push_pending(lidar_ready, "雷达");
+        push_pending(depth_ready, "深度相机");
+        push_pending(rgb_ready, "RGB+YOLO");
+    }
 
     if (pending_devices.empty()) {
         reason.clear();

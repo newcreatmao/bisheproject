@@ -1650,6 +1650,8 @@
 	      traceStaticIgnoreThresholdM: 0.55
 	    };
 	    const AUTO_GPS_DEBUG_MARKERS_ENABLED = true;
+	    const AUTO_LOCAL_OSM_TILES_URL = '/allfile/osm_tiles/{z}/{x}/{y}.png';
+	    const AUTO_REMOTE_OSM_TILES_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 
 	    const autoWorkspaceState = {
 	      config: null,
@@ -1710,7 +1712,7 @@
 	        : fallback;
 	    }
 
-	    function stopModeSwitchStatus(system, devices) {
+	    function stopModeSwitchStatus(system, devices, targetMode = 'AUTO') {
 	      if (!system || !system.running) {
 	        return {
 	          ready: false,
@@ -1718,13 +1720,19 @@
 	        };
 	      }
 
-	      const requiredDevices = [
-	        ['gps', 'GPS'],
-	        ['imu', 'IMU'],
-	        ['lidar', '雷达'],
-	        ['depth_camera', '深度相机'],
-	        ['rgb_yolo', 'RGB + YOLO']
-	      ];
+	      const requiredDevicesByMode = {
+	        AUTO: [
+	          ['gps', 'GPS'],
+	          ['imu', 'IMU'],
+	          ['lidar', '雷达']
+	        ],
+	        AVOIDANCE: [
+	          ['imu', 'IMU'],
+	          ['lidar', '雷达']
+	        ],
+	        MANUAL: []
+	      };
+	      const requiredDevices = requiredDevicesByMode[targetMode] || requiredDevicesByMode.AUTO;
 	      const pending = requiredDevices
 	        .filter(([key]) => deviceCode(devices && devices[key]) !== 'started')
 	        .map(([, label]) => label);
@@ -1732,28 +1740,47 @@
 	      if (pending.length === 0) {
 	        return {
 	          ready: true,
-	          message: '停止模式检测完成，可以切换到其他模式。'
+	          message: '停止模式检测完成，可以切换到目标工作区。'
 	        };
 	      }
 
 	      return {
 	        ready: false,
-	        message: `停止模式检测中，以下设备未就绪：${pending.join('、')}`
+	        message: `切换到${modeLabels[targetMode] ? modeLabels[targetMode].text : targetMode}工作区前，以下设备未就绪：${pending.join('、')}`
 	      };
 	    }
 
 	    function renderStopModeSwitchState(system = {}, devices = {}) {
-	      const status = stopModeSwitchStatus(system, devices);
 	      const lockOtherModes = workspaceState.activeMode === 'STOP';
+	      const targetModes = ['AUTO', 'AVOIDANCE', 'MANUAL'];
+	      const statuses = {};
+	      targetModes.forEach(mode => {
+	        statuses[mode] = stopModeSwitchStatus(system, devices, mode);
+	      });
 
 	      document.querySelectorAll('#mode-toggle button').forEach(button => {
 	        if (button.dataset.mode !== 'stop') {
+	          const mode = button.dataset.mode.toUpperCase();
+	          const status = statuses[mode] || stopModeSwitchStatus(system, devices, mode);
 	          button.disabled = lockOtherModes && !status.ready;
+	          button.title = lockOtherModes ? status.message : '';
 	        }
 	      });
 
 	      if (lockOtherModes) {
-	        setText('stop-mode-switch-status', status.message);
+	        const readyModes = targetModes
+	          .filter(mode => statuses[mode] && statuses[mode].ready)
+	          .map(mode => modeLabels[mode].text);
+	        const blockedModes = targetModes
+	          .filter(mode => statuses[mode] && !statuses[mode].ready)
+	          .map(mode => `${modeLabels[mode].text}：${statuses[mode].message}`);
+	        if (blockedModes.length === 0) {
+	          setText('stop-mode-switch-status', '停止模式检测完成，可以切换到其他工作区。');
+	        } else if (readyModes.length === 0) {
+	          setText('stop-mode-switch-status', blockedModes.join('；'));
+	        } else {
+	          setText('stop-mode-switch-status', `可切换：${readyModes.join('、')}；${blockedModes.join('；')}`);
+	        }
 	        return;
 	      }
 
@@ -1773,6 +1800,10 @@
 	      });
 	    }
 
+	    function autoWorkspaceHasGpsFix() {
+	      return Boolean(autoWorkspaceState.runtime && autoWorkspaceState.runtime.gps_valid);
+	    }
+
 	    function renderAutoTaskButtonState() {
 	      const runtime = autoWorkspaceState.runtime;
 	      const interactionReady =
@@ -1783,9 +1814,11 @@
 	        (runtime && runtime.plan_ready) ||
 	        autoWorkspaceState.planData ||
 	        autoWorkspaceState.destination);
+	      const hasGpsFix = autoWorkspaceHasGpsFix();
 	      const startEnabled =
 	        interactionReady &&
 	        hasPlan &&
+	        hasGpsFix &&
 	        !(runtime && (runtime.task_running || runtime.awaiting_start_ack));
 	      const stopEnabled =
 	        interactionReady &&
@@ -2628,11 +2661,70 @@
 	      return autoWorkspaceState.configPromise;
 	    }
 
+	    function autoWorkspaceFallbackConfig() {
+	      return {
+	        ok: true,
+	        workspace: 'AUTO',
+	        map: {
+	          provider: 'osm',
+	          configured: true,
+	          tk: '',
+	          tiles_url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+	          radius_m: 100
+	        },
+	        route_provider: 'osrm',
+	        coordinate_frame: {
+	          mode: 'local_xy',
+	          origin_valid: false
+	        },
+	        _frontend_fallback: true
+	      };
+	    }
+
 	    function currentAutoMapProvider() {
 	      const provider = autoWorkspaceState.config && autoWorkspaceState.config.map && typeof autoWorkspaceState.config.map.provider === 'string'
 	        ? autoWorkspaceState.config.map.provider.trim().toLowerCase()
-	        : 'tianditu';
+	        : 'osm';
 	      return provider === 'osm' ? 'osm' : 'tianditu';
+	    }
+
+	    function currentAutoOsmRemoteTilesUrl() {
+	      const configuredUrl =
+	        autoWorkspaceState.config &&
+	        autoWorkspaceState.config.map &&
+	        typeof autoWorkspaceState.config.map.tiles_url === 'string' &&
+	        autoWorkspaceState.config.map.tiles_url.trim()
+	          ? autoWorkspaceState.config.map.tiles_url.trim()
+	          : '';
+	      return configuredUrl || AUTO_REMOTE_OSM_TILES_URL;
+	    }
+
+	    function currentAutoMapCenter() {
+	      const latestGps = autoWorkspaceState.latestGps;
+	      if (
+	        latestGps &&
+	        latestGps.valid &&
+	        Number.isFinite(Number(latestGps.latitude)) &&
+	        Number.isFinite(Number(latestGps.longitude))
+	      ) {
+	        return createMapPoint(Number(latestGps.longitude), Number(latestGps.latitude));
+	      }
+
+	      const frame =
+	        autoWorkspaceState.config &&
+	        autoWorkspaceState.config.coordinate_frame
+	          ? autoWorkspaceState.config.coordinate_frame
+	          : null;
+	      if (
+	        frame &&
+	        frame.origin_valid &&
+	        Number.isFinite(Number(frame.origin_latitude)) &&
+	        Number.isFinite(Number(frame.origin_longitude))
+	      ) {
+	        return createMapPoint(Number(frame.origin_longitude), Number(frame.origin_latitude));
+	      }
+
+	      return createMapPoint(116.404, 39.915);
 	    }
 
 	    function updateAutoMapProviderChip() {
@@ -2724,6 +2816,18 @@
 	        return autoWorkspaceState.mapScriptPromise;
 	      }
 	      autoWorkspaceState.mapScriptPromise = new Promise((resolve, reject) => {
+	        const stylesheetCandidates = [
+	          '/allfile/leaflet/leaflet.css',
+	          'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css',
+	          'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css',
+	          'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
+	        ];
+	        const scriptCandidates = [
+	          '/allfile/leaflet/leaflet.js',
+	          'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js',
+	          'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js',
+	          'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
+	        ];
 	        const timeoutId = window.setTimeout(() => {
 	          reject(new Error('OSM 地图脚本加载超时'));
 	        }, 12000);
@@ -2731,29 +2835,39 @@
 	        if (!document.querySelector('link[data-auto-map-leaflet-css="true"]')) {
 	          const link = document.createElement('link');
 	          link.rel = 'stylesheet';
-	          link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
 	          link.dataset.autoMapLeafletCss = 'true';
+	          link.href = stylesheetCandidates[0];
 	          document.head.appendChild(link);
 	        }
 
-	        const script = document.createElement('script');
-	        script.async = true;
-	        script.defer = true;
-	        script.dataset.autoMapLeafletScript = 'true';
-	        script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-	        script.onload = () => {
-	          window.clearTimeout(timeoutId);
-	          if (window.L && typeof window.L.map === 'function') {
-	            resolve(window.L);
+	        const loadScriptCandidate = index => {
+	          if (index >= scriptCandidates.length) {
+	            window.clearTimeout(timeoutId);
+	            reject(new Error('OSM 地图脚本加载失败'));
 	            return;
 	          }
-	          reject(new Error('OSM 地图脚本已加载，但 Leaflet 不可用'));
+	          const script = document.createElement('script');
+	          script.async = true;
+	          script.defer = true;
+	          script.dataset.autoMapLeafletScript = 'true';
+	          script.src = scriptCandidates[index];
+	          script.onload = () => {
+	            if (window.L && typeof window.L.map === 'function') {
+	              window.clearTimeout(timeoutId);
+	              resolve(window.L);
+	              return;
+	            }
+	            script.remove();
+	            loadScriptCandidate(index + 1);
+	          };
+	          script.onerror = () => {
+	            script.remove();
+	            loadScriptCandidate(index + 1);
+	          };
+	          document.body.appendChild(script);
 	        };
-	        script.onerror = () => {
-	          window.clearTimeout(timeoutId);
-	          reject(new Error('OSM 地图脚本加载失败'));
-	        };
-	        document.body.appendChild(script);
+
+	        loadScriptCandidate(0);
 	      }).catch(error => {
 	        autoWorkspaceState.mapScriptPromise = null;
 	        throw error;
@@ -2767,6 +2881,39 @@
 
 	    function getLeafletNamespace() {
 	      return window.L && typeof window.L.map === 'function' ? window.L : null;
+	    }
+
+	    function createAutoOsmTileLayer(L) {
+	      if (!L || typeof L.tileLayer !== 'function') {
+	        return null;
+	      }
+	      const localTilesUrl = AUTO_LOCAL_OSM_TILES_URL;
+	      const remoteTilesUrl = currentAutoOsmRemoteTilesUrl();
+	      const layer = L.tileLayer(localTilesUrl, {
+	        maxZoom: 19,
+	        attribution: '&copy; OpenStreetMap'
+	      });
+	      if (typeof layer.on === 'function') {
+	        layer.on('tileerror', event => {
+	          if (!event || !event.tile || !event.coords) {
+	            return;
+	          }
+	          if (event.tile.dataset.autoMapRemoteFallback === 'true') {
+	            return;
+	          }
+	          const coords = event.coords;
+	          const subdomains = ['a', 'b', 'c'];
+	          const subdomain = subdomains[Math.abs((coords.x || 0) + (coords.y || 0)) % subdomains.length];
+	          event.tile.dataset.autoMapRemoteFallback = 'true';
+	          event.tile.src = L.Util.template(remoteTilesUrl, {
+	            s: subdomain,
+	            x: coords.x,
+	            y: coords.y,
+	            z: coords.z
+	          });
+	        });
+	      }
+	      return layer;
 	    }
 
 	    function resetAutoMapInstance() {
@@ -3470,15 +3617,12 @@
 	      }
 
 	      setAutoMapVisible();
-	      const initialPoint = createMapPoint(116.404, 39.915);
+	      const initialPoint = currentAutoMapCenter();
 	      if (!initialPoint) {
 	        throw new Error(provider === 'osm' ? 'OSM 地图坐标对象初始化失败' : '天地图坐标对象初始化失败');
 	      }
 	      let map = null;
 	      if (provider === 'osm') {
-	        const tilesUrl = autoWorkspaceState.config && autoWorkspaceState.config.map && autoWorkspaceState.config.map.tiles_url
-	          ? autoWorkspaceState.config.map.tiles_url
-	          : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 	        map = L.map('auto-map-canvas', {
 	          zoomControl: true,
 	          preferCanvas: true
@@ -3486,10 +3630,11 @@
 	        if (map.doubleClickZoom && typeof map.doubleClickZoom.disable === 'function') {
 	          map.doubleClickZoom.disable();
 	        }
-	        L.tileLayer(tilesUrl, {
-	          maxZoom: 19,
-	          attribution: '&copy; OpenStreetMap'
-	        }).addTo(map);
+	        const tileLayer = createAutoOsmTileLayer(L);
+	        if (!tileLayer) {
+	          throw new Error('OSM 瓦片图层初始化失败');
+	        }
+	        tileLayer.addTo(map);
 	        map.setView(initialPoint, 18);
 	      } else {
 	        map = new TMap.Map('auto-map-canvas');
@@ -3513,7 +3658,17 @@
 
 	    async function ensureAutoWorkspaceMapReady() {
 	      try {
-	        const config = await fetchAutoWorkspaceConfig();
+	        let config = null;
+	        let usingFallbackConfig = false;
+	        try {
+	          config = await fetchAutoWorkspaceConfig();
+	        } catch (configError) {
+	          config = autoWorkspaceFallbackConfig();
+	          autoWorkspaceState.config = config;
+	          autoWorkspaceState.configPromise = null;
+	          updateAutoMapProviderChip();
+	          usingFallbackConfig = true;
+	        }
 	        const provider = currentAutoMapProvider();
 	        if (autoWorkspaceState.mapReady && autoWorkspaceState.mapProvider !== provider) {
 	          resetAutoMapInstance();
@@ -3521,6 +3676,9 @@
 	        if (autoWorkspaceState.mapReady) {
 	          setAutoMapVisible();
 	          refreshAutoMapSize();
+	          if (usingFallbackConfig) {
+	            setAutoMapCaption('后端地图配置暂时不可用，已回退为 OSM 底图显示。');
+	          }
 	          updateAutoMapOverlaysSafely();
 	          return true;
 	        }
@@ -3543,6 +3701,9 @@
 	        await waitForBrowserFrame();
 	        await waitForBrowserFrame();
 	        initAutoWorkspaceMapInstance();
+	        if (usingFallbackConfig) {
+	          setAutoMapCaption('后端地图配置暂时不可用，已回退为 OSM 底图显示。');
+	        }
 	        return autoWorkspaceState.mapReady;
 	      } catch (error) {
 	        setAutoMapEmpty(`自动工作区地图初始化失败：${error.message}`);
@@ -4492,7 +4653,8 @@
           button: document.getElementById('auto-task-start-btn'),
           url: '/api/auto/start',
           frame: '#C3=1!',
-          pendingText: '正在发送自动任务开始指令'
+          pendingText: '正在发送自动任务开始指令',
+          requiresGpsFix: true
         },
         stop: {
           button: document.getElementById('auto-task-stop-btn'),
@@ -4513,6 +4675,13 @@
               status.textContent = workspaceState.switching
                 ? '正在切换到自动工作区，请稍后再操作。'
                 : '请先进入自动工作区，再操作自动任务按钮。';
+            }
+            return;
+          }
+
+          if (command.requiresGpsFix && !autoWorkspaceHasGpsFix()) {
+            if (status) {
+              status.textContent = '当前 GPS 尚未得到 fix，自动任务暂时不能开始。';
             }
             return;
           }
@@ -4914,6 +5083,7 @@
 	      initVehicleEmergencyStop();
 	      initSensorsStart();
 	      initSensorsStop();
+	      ensureAutoWorkspaceMapReady().catch(() => {});
 		  </script>
 </body>
 </html>
